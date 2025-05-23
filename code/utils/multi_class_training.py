@@ -126,19 +126,17 @@ class MultiClassModel:
                 predictions=self.predict(test_dataset)
                 true_vals=test_dataset["targets"]
  
-        print(np.shape(true_vals))
-        print(np.shape(predictions))
+
         mse = np.mean((true_vals- predictions) ** 2)
-        print(f'Mean Squared Error: {mse}')
+      
         try:
             r2 = r2_score(true_vals.flatten(), predictions.flatten())
         except:
             r2=0
-        print(f'R-squared: {r2}')
-        print(np.shape(true_vals))
-        print(np.shape(predictions))
+       
+ 
         p2=ttest_ind(true_vals.flatten(), predictions.flatten()).pvalue
-        print(f'p2: {p2}')
+        
 
         result=[mse,r2,p2]
         names=["mse","r2","p2"]
@@ -150,14 +148,17 @@ class MultiClassModel:
         return metrics_dict
         
     def fit_sklearn(self,model,X_train,y_train):
-        print("fit_sklearnfit_sklearnfit_sklearn",self.model_path)
         if(self.retrain is False):
-            self.model=load_pickle_model(self.model_path)
-            
-            return self.model
+            model=load_pickle_model(self.model_path)
+            if(model is not False):
+                self.model=model
+                return self.model
         
-        
-        self.model.fit(X_train,y_train)
+        print("fit")
+        y_train=y_train.ravel()
+        print(np.shape(y_train))
+        print(np.shape(X_train))
+        self.model.fit(X_train,y_train.ravel())
         save_pickle_model(self.model,self.model_path)
            
         
@@ -185,7 +186,7 @@ class MultiClassModel:
             self.model=model
             return
         self.model.compile(
-                    loss=tf.losses.MeanSquaredError(),
+                    loss=tf.losses.Huber(),
                     optimizer=tf.optimizers.Adam(),
                     metrics=[tf.metrics.MeanAbsoluteError()],
                 )
@@ -193,7 +194,7 @@ class MultiClassModel:
         early_stopping = tf.keras.callbacks.EarlyStopping(
                     monitor="val_loss",
                     patience=6,
-                    mode="min",
+                  
                     restore_best_weights=True
                 )
         checkpoint = tf.keras.callbacks.ModelCheckpoint(
@@ -201,7 +202,7 @@ class MultiClassModel:
                     monitor="val_loss",
                     save_best_only=True,
                     save_weights_only=False,  # Set to True if you only want weights
-                    mode="min",
+                 
                     verbose=0
                 )
 
@@ -276,6 +277,7 @@ def load_pickle_model(model_path):
     if os.path.exists(model_path):
         with open(model_path,"rb") as f:
                 return load(f)
+    return False
 
 
 

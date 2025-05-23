@@ -69,7 +69,6 @@ class WindowGenerator:
 
         for row_idx, model in enumerate(models):
             predictions = model(inputs) if model is not None else None
-            print(np.shape(predictions))
             for col_idx in range(max_n):
                 ax = axes[row_idx][col_idx]
 

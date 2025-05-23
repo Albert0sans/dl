@@ -6,6 +6,37 @@ from sklearn.multioutput import MultiOutputRegressor
 #Input shape is: (look_back,forecast)
 import numpy as np
 
+
+
+
+
+
+
+
+import tensorflow as tf
+from keras.saving import register_keras_serializable
+
+@register_keras_serializable()
+class ZeroBaseline(tf.keras.Model):
+    def __init__(self, out_steps, out_width, **kwargs):
+        super().__init__(**kwargs)
+        self.out_steps = out_steps
+        self.out_width = out_width
+
+    def call(self, inputs):
+        batch_size = tf.shape(inputs)[0]
+        return tf.fill([batch_size, self.out_steps, self.out_width], 0.0)
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "out_steps": self.out_steps,
+            "out_width": self.out_width,
+        })
+        return config
+
+
+
 def rf(OUT_STEPS,OUT_WIDTH):
     # Create the full pipeline
     
@@ -33,12 +64,12 @@ def auto_encoder(OUT_STEPS, INPUT_WIDTH, in_features, out_features):
     encoder = tf.keras.Sequential([
         tf.keras.layers.Input(shape=(INPUT_WIDTH, in_features)),
         tf.keras.layers.Flatten(),
-        tf.keras.layers.Dense(32, activation='relu'),
+        tf.keras.layers.Dense(64, activation='relu'),
     ], name="encoder")
 
     # Decoder model
     decoder = tf.keras.Sequential([
-        tf.keras.layers.Dense(32, activation='relu'),
+        tf.keras.layers.Dense(64, activation='relu'),
         tf.keras.layers.Dense(OUT_STEPS * out_features, activation='linear'),
         tf.keras.layers.Reshape((OUT_STEPS, out_features)),
     ], name="decoder")
