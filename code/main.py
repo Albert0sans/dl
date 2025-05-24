@@ -25,15 +25,16 @@ df=df.sample(frac=1).sort_index()
 # Shuffle the DataFrame
 
 # Split into 80/20
-split_idx = int(len(df) * 1)
+split_idx = int(len(df) * 0.8)
 validation_df = df[split_idx:]
 
 df = df[:split_idx]
 
 df = preprocesDf(df)
+print(df)
 df=computeFeatures(df)
 n=len(df)
-
+print(df)
 #target_cols = ["TARGET_close_AAPL"]
 target_cols=["COTTON"]
 num_features = len(target_cols)
@@ -73,12 +74,12 @@ generator=CustomLayers.generator(32,OUT_STEPS, num_features)
 transformer=transformer_timeseries(
  
     input_shape= (INPUT_WIDTH,in_features),
-    head_size=256,
+    head_size=32,
     num_heads=4,
     ff_dim=4,
     num_transformer_blocks=4,
-    mlp_units=[128],
-    mlp_dropout=0.4,
+    mlp_units=[32],
+    mlp_dropout=0.2,
     dropout=0.25,
 
     output_size=[OUT_STEPS,num_features]
@@ -121,9 +122,9 @@ models = {
   #  "test":CustomLayers.ZeroBaseline(OUT_STEPS,num_features),
   #  "informer":informer,
    "transformer":transformer,
-  #"multi_dense_model":CustomLayers.multi_dense_model( INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
-   # "gan":GenerativeAdversialEncoderWrapper(OUT_STEPS=OUT_STEPS,generator=generator,discriminator=discriminator, num_features=in_features,),
-   "ar_lstmstatefull_model":AutoregressiveWrapperLSTM(OUT_STEPS= OUT_STEPS,num_features=in_features),
+  "multi_dense_model":CustomLayers.multi_dense_model( INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
+  #  "gan":GenerativeAdversialEncoderWrapper(OUT_STEPS=OUT_STEPS,generator=generator,discriminator=discriminator, num_features=in_features,),
+   #"ar_lstmstatefull_model":AutoregressiveWrapperLSTM(OUT_STEPS= OUT_STEPS,num_features=in_features),
     "auto_encoder":CustomLayers.auto_encoder(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
  #   #"transformer_model":CustomLayers.random_forest(OUT_STEPS=OUT_STEPS, num_features=num_features),
    
@@ -132,7 +133,8 @@ models = {
    "rnn_model_gru": CustomLayers.rnn_model_gru(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
     "multi_dense_model":CustomLayers.multi_dense_model( INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
    #"extrarfsklearn":CustomLayers.extrarf(OUT_STEPS,num_features),
-
+   
+"hgb":CustomLayers.hgb(OUT_STEPS,num_features),
    "rfsklearn":CustomLayers.rf(OUT_STEPS,num_features),
 }
 
@@ -144,11 +146,6 @@ for name,model in models.items():
        # model.build(input_shape=inputshape)  # batch size is None (flexible)
 
 
-
-
-
-
-
 model_metrics = {}
 
 
@@ -156,7 +153,7 @@ model_metrics = {}
 for name, model in models.items():
     model=mc.MultiClassModel(
                         model=model,
-                        retrain=True,
+                        retrain=False,
                          model_name=name,
                          epochs=MAX_EPOCHS,
                          target_indices=multi_window.target_indices,
@@ -188,13 +185,14 @@ fig, axes = plt.subplots(2, len(models),  )
 for idx, key in enumerate(model_metrics):
     model = models[key]
     forecast = model.predict(X_test).flatten()
+
     true = y_test
 
     ax_forecast = axes[0, idx]
     ax_kde = axes[1, idx]
     ax_forecast.plot(forecast.flatten(), label="Forecast")
     ax_forecast.plot(true.flatten(), label="Real")
-    ax_forecast.set_title(f"{key} - mse: {model_metrics[key]['mse']:.6f}, r2: {model_metrics[key]['r2']:.6f}")
+    ax_forecast.set_title(key)
     ax_forecast.legend()
     ax_forecast.grid(True)
 
@@ -205,14 +203,14 @@ for idx, key in enumerate(model_metrics):
     ax_kde.set_xlabel("Value")
     ax_kde.set_ylabel("Density")
     ax_kde.grid(True)
-
+    print(f"{key} - mse: {model_metrics[key]['mse']:.6f}, r2: {model_metrics[key]['r2']:.6f}")
     # Optional backtest dataframe
     df = pd.DataFrame({"forecast": forecast.flatten(), "real": true.flatten()})
-    # simple_backtest(df, real_column="real", forecast_column="forecast")
+    simple_backtest(df, real_column="real", forecast_column="forecast")
 
-plt.tight_layout()
+
 plt.show()
-exit(0)
+
 def process_row(previous_row,current_row):
      
      return np.log(previous_row /current_row).values
@@ -236,7 +234,7 @@ def simulate_trading(model, val_df, input_width, target_col="target", threshold=
         # Compute log change
         log_change = process_row(previous_row, current_row)
         if mean is not None and std is not None:
-           #log_change = (log_change - mean) / std
+           log_change = (log_change - mean) / std
            r=0
         current_model_input.append(log_change)
 
@@ -250,11 +248,11 @@ def simulate_trading(model, val_df, input_width, target_col="target", threshold=
             
             # Prepare input
             model_input = np.vstack(current_model_input)[np.newaxis, :, :]
-
+            model_input = np.nan_to_num(model_input,0)
             prediction = model.predict(model_input)
             
             prediction=prediction.flatten()  # Assume single float predicted: return or price delta
-            
+            print(prediction)
             # Compute actual return (log return)
             actual = np.log(val_df.iloc[i + 2][target_col] / current_row[target_col])
             

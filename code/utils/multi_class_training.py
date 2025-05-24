@@ -187,7 +187,7 @@ class MultiClassModel:
             return
         self.model.compile(
                     loss=tf.losses.Huber(),
-                    optimizer=tf.optimizers.Adam(),
+                    optimizer=tf.optimizers.Adam(learning_rate=1e-5),
                     metrics=[tf.metrics.MeanAbsoluteError()],
                 )
                 

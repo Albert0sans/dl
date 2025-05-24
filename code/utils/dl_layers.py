@@ -1,7 +1,7 @@
 from utils.sklearn3dwrapper import sklearn3dWrapper
 import tensorflow as tf
 
-from sklearn.ensemble import RandomForestRegressor,ExtraTreesRegressor
+from sklearn.ensemble import RandomForestRegressor,ExtraTreesRegressor,HistGradientBoostingRegressor
 from sklearn.multioutput import MultiOutputRegressor
 #Input shape is: (look_back,forecast)
 import numpy as np
@@ -44,6 +44,16 @@ def rf(OUT_STEPS,OUT_WIDTH):
     # Wrap your RandomForestRegressor
     return sklearn3dWrapper(
         RandomForestRegressor( n_estimators=100, n_jobs=-1,max_depth=6),
+        target_shape=(OUT_STEPS,OUT_WIDTH) 
+    
+    )
+def hgb(OUT_STEPS,OUT_WIDTH):
+    # Create the full pipeline
+    
+
+    # Wrap your RandomForestRegressor
+    return sklearn3dWrapper(
+        HistGradientBoostingRegressor( max_iter=100,),
         target_shape=(OUT_STEPS,OUT_WIDTH) 
     
     )
@@ -124,9 +134,9 @@ def multi_dense_model(OUT_STEPS,INPUT_WIDTH, in_features,out_features):
         layers=[
             tf.keras.layers.Input(shape=(INPUT_WIDTH, in_features)),
             tf.keras.layers.Flatten(),
-            tf.keras.layers.Dense(500, activation="relu"),
-            tf.keras.layers.Dense(500, activation="relu"),
-            tf.keras.layers.Dense(500, activation="relu"),
+            tf.keras.layers.Dense(32, activation="relu"),
+            tf.keras.layers.Dense(32, activation="relu"),
+            tf.keras.layers.Dense(32, activation="relu"),
             # Shape => [batch, out_steps*features]
             tf.keras.layers.Dense(
                 OUT_STEPS * out_features,
