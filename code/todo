@@ -1,0 +1,18 @@
+def order_func_nb(c, size, direction, fees):
+    return nb.order_nb(
+        price=c.close[c.i, c.col],
+        size=size[c.i],
+        direction=direction[c.col],
+        fees=fees
+)
+
+direction_num = map_enum_fields(direction, Direction)
+pf = vbt.Portfolio.from_order_func(
+    price,
+    order_func_nb,
+    np.asarray(size), np.asarray(direction_num), fees
+)
+
+
+simplificar main, mover crear data a mc
+descargar datos de acciones con intervalo de 15 minutos desde el 2000

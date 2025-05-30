@@ -1,15 +1,11 @@
 from utils.sklearn3dwrapper import sklearn3dWrapper
 import tensorflow as tf
-
+import ydf
 from sklearn.ensemble import RandomForestRegressor,ExtraTreesRegressor,HistGradientBoostingRegressor
 from sklearn.multioutput import MultiOutputRegressor
 #Input shape is: (look_back,forecast)
 import numpy as np
-
-
-
-
-
+from utils.layers.transformer import transformer_timeseries
 
 
 
@@ -36,6 +32,9 @@ class ZeroBaseline(tf.keras.Model):
         return config
 
 
+def gbt(OUT_STEPS,OUT_WIDTH):
+    return ydf.GradientBoostedTreesLearner(label="targets",task=ydf.Task.REGRESSION)
+
 
 def rf(OUT_STEPS,OUT_WIDTH):
     # Create the full pipeline
@@ -47,6 +46,23 @@ def rf(OUT_STEPS,OUT_WIDTH):
         target_shape=(OUT_STEPS,OUT_WIDTH) 
     
     )
+    
+    
+def transformer(INPUT_WIDTH,in_features,OUT_STEPS,out_features):
+    return transformer_timeseries(
+ 
+    input_shape= (INPUT_WIDTH,in_features),
+    head_size=32,
+    num_heads=4,
+    ff_dim=4,
+    num_transformer_blocks=4,
+    mlp_units=[32],
+    mlp_dropout=0.2,
+    dropout=0.25,
+
+    output_size=[OUT_STEPS,out_features]
+)
+    
 def hgb(OUT_STEPS,OUT_WIDTH):
     # Create the full pipeline
     
@@ -194,7 +210,9 @@ class AutoregressiveWrapperLSTM(tf.keras.Model):
         # predictions.shape => (batch, features)
         prediction = self.dense(x)
         return prediction, state
+    @tf.function
     def call(self, inputs, training=None):
+
         if self.autoregression:
                 # Use a TensorArray to capture dynamically unrolled outputs.
                 predictions = []
@@ -203,17 +221,12 @@ class AutoregressiveWrapperLSTM(tf.keras.Model):
 
                 # Insert the first prediction.
                 predictions.append(prediction)
-
+                x = prediction
                 # Run the rest of the prediction steps.
-                for n in range(1, self.out_steps):
-                    # Use the last prediction as input.
-                    x = prediction
-                    # Execute one lstm step.
-                    x, state = self.lstm_cell(x, states=state,
-                                            training=training)
-                    # Convert the lstm output to a prediction.
+                for n in tf.range(1, self.out_steps):
+                    # Use the last LSTM output (not dense output) as input
+                    x, state = self.lstm_cell(x, states=state, training=training)
                     prediction = self.dense(x)
-                    # Add the prediction to the output.
                     predictions.append(prediction)
 
                 # predictions.shape => (time, batch, features)
@@ -283,8 +296,12 @@ class GenerativeAdversialEncoderWrapper(tf.keras.Model):
         return self.generator(inputs, training=training)
 
     def train_step(self, data):
-        # Unpack the data: assume (inputs, real_target)
-        inputs, real_data = data
+        # Handle optional sample_weight
+        if len(data) == 3:
+            inputs, real_data, sample_weight = data
+        else:
+            inputs, real_data = data
+            sample_weight = None
 
         batch_size = tf.shape(real_data)[0]
         cross_entropy = tf.keras.losses.BinaryCrossentropy(from_logits=True)
@@ -295,18 +312,32 @@ class GenerativeAdversialEncoderWrapper(tf.keras.Model):
             fake_output = self.discriminator(generated_data, training=True)
 
             gen_loss = cross_entropy(tf.ones_like(fake_output), fake_output)
-            disc_loss = self.loss_fn(tf.ones_like(real_output), real_output) + \
-                        self.loss_fn(tf.zeros_like(fake_output), fake_output)
+            
+            disc_loss_real = self.loss_fn(tf.ones_like(real_output), real_output)
+            disc_loss_fake = self.loss_fn(tf.zeros_like(fake_output), fake_output)
+
+            # Apply sample weights if provided
+            if sample_weight is not None:
+                sample_weight = tf.cast(sample_weight, dtype=disc_loss_real.dtype)
+                disc_loss_real *= sample_weight
+                disc_loss_fake *= sample_weight
+                # Average over batch
+                disc_loss_real = tf.reduce_mean(disc_loss_real)
+                disc_loss_fake = tf.reduce_mean(disc_loss_fake)
+
+            disc_loss = disc_loss_real + disc_loss_fake
 
         gradients_of_generator = gen_tape.gradient(gen_loss, self.generator.trainable_variables)
         gradients_of_discriminator = disc_tape.gradient(disc_loss, self.discriminator.trainable_variables)
 
         self.g_optimizer.apply_gradients(zip(gradients_of_generator, self.generator.trainable_variables))
         self.d_optimizer.apply_gradients(zip(gradients_of_discriminator, self.discriminator.trainable_variables))
+
         return {
             "gen_loss": gen_loss,
             "disc_loss": disc_loss
         }
+
 
 
     def get_config(self):
@@ -339,8 +370,7 @@ class GenerativeAdversialEncoderWrapper(tf.keras.Model):
         self.compile(optimizer=self.optimizer, loss=self.loss_fn,)# metrics=metrics)
         
         
-import numpy as np
-import numpy as np
+
 
 class AutoregressiveWrapper:
     def __init__(self, model, out_steps, num_features, autoregression=True):

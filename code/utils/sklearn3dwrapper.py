@@ -6,11 +6,11 @@ class sklearn3dWrapper(BaseEstimator, RegressorMixin):
             self.base_model = base_model
             self.target_shape = target_shape  # e.g., (1, 1)
 
-        def fit(self, X, y):
+        def fit(self, X, y, **kwargs):
             X=X.reshape(X.shape[0], -1) 
             y=y.reshape(y.shape[0], -1) .ravel()
 
-            self.base_model.fit(X, y)
+            self.base_model.fit(X, y,**kwargs)
             return self
         def __call__(self, *args, **kwds):
              return self.predict(X=args[0])

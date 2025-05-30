@@ -71,7 +71,7 @@ def load_keras_model(model_path):
         return new_model
     return False
 
-def save_keras_model(model,model_path):
+
     
 def save_pickle_model(model,model_path):
     with open(model_path,"wb") as f:

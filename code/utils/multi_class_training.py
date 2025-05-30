@@ -4,6 +4,7 @@ from pickle import dump,load
 import os
 from scipy.stats import ttest_ind
 from ydf import GenericLearner
+import ydf
 from tensorflow.keras import Model as KerasModel
 from sklearn.base import BaseEstimator
 tf.keras.config.enable_unsafe_deserialization()
@@ -81,30 +82,34 @@ class MultiClassModel:
          match self.mode_type:
             
             case "keras":
-                keras_code()
+               return  keras_code()
             case "sklearn":
-                sklearn_code()
+               return sklearn_code()
             case "ydf":
-                ydf_code()
-    def fit(self,):
+               return ydf_code()
+    def fit(self,sample_weight):
         self.runforeachclass(
            keras_code=lambda: self.fit_keras(
                                
                               ),
-           sklearn_code=lambda: self.fit_sklearn(self.model,self.X_train,self.y_train),
-           ydf_code=lambda: self.fit_ydf(self.model,self.train_dict)
+           sklearn_code=lambda: self.fit_sklearn(self.model,self.X_train,self.y_train,sample_weight=sample_weight),
+           ydf_code=lambda: self.fit_ydf(self.model,self.train_dict,sample_weight=sample_weight)
        )
         return self.model
-        
+     
     def predict(self,data):
-        pred=self.model.predict(data)
-        if(pred.shape[-1]>len(self.target_indices)):
-            try:
-                return pred[:,:,self.target_indices]
-            except:
-                pass
+        
+        
+        pred = self.runforeachclass(
+           keras_code=lambda: self.predict_keras(data
+                               
+                              ),
+           sklearn_code=lambda: self.predict_sklearn(data),
+           ydf_code=lambda: self.predict_ydf(data)
+       )
         return pred
         
+     
     def evaluate(self,test_dataset=None):
         # Evaluate the model on the test dataset
         
@@ -147,24 +152,30 @@ class MultiClassModel:
 
         return metrics_dict
         
-    def fit_sklearn(self,model,X_train,y_train):
+    def fit_sklearn(self,model,X_train,y_train, **kwargs  ):
         if(self.retrain is False):
             model=load_pickle_model(self.model_path)
             if(model is not False):
                 self.model=model
                 return self.model
         
-        print("fit")
+
         y_train=y_train.ravel()
-        print(np.shape(y_train))
-        print(np.shape(X_train))
-        self.model.fit(X_train,y_train.ravel())
+        self.model.fit(X_train,y_train, **kwargs  )
         save_pickle_model(self.model,self.model_path)
            
         
         return self.model
-    def fit_ydf(self,model,train_dict):
+    def fit_ydf(self,model,train_dict, **kwargs ):
+        if(self.retrain is False):
+            if(os.path.exists(self.model_path)):
+                model=ydf.load_model(self.model_path)
+                if(model is not False):
+                    self.model=model
+                    return self.model
+
         self.model= model.train(train_dict)
+        self.model.save(self.model_path)
     def getType(self,):
         originalmodelinstance=self.model
         if(hasattr(self.model,"model")):
@@ -178,7 +189,7 @@ class MultiClassModel:
         else:
             return False
         
-    def fit_keras(self,):
+    def fit_keras(self,**kwargs):
         model=False
         if(self.retrain is False):
             model= load_keras_model(model_path=self.model_path)
@@ -187,7 +198,7 @@ class MultiClassModel:
             return
         self.model.compile(
                     loss=tf.losses.Huber(),
-                    optimizer=tf.optimizers.Adam(learning_rate=1e-5),
+                    optimizer=tf.optimizers.Adam(learning_rate=1e-4,clipnorm=1.0),
                     metrics=[tf.metrics.MeanAbsoluteError()],
                 )
                 
@@ -216,14 +227,40 @@ class MultiClassModel:
                     epochs=self.epochs,
                     validation_data=self.val_ds,
                     callbacks=[early_stopping,checkpoint,reduce_lr],
-                    verbose=1
+                    verbose=1,
+                    steps_per_epoch=10,
+                     **kwargs  
+                    
                 )
         return self.model
         
 
 
 
-
+    def predict_ydf(self,data):
+       
+        if (not isinstance(data,dict)):
+            data=make_ds_dict(X=data)
+            pred=self.model.predict(data)
+        else:
+            pred=self.model.predict(data)
+        return pred
+    def predict_keras(self,data):
+        pred=self.model.predict(data,verbose=0)
+        if(pred.shape[-1]>len(self.target_indices)):
+            try:
+                return pred[:,:,self.target_indices]
+            except:
+                pass
+        return pred
+    def predict_sklearn(self,data):
+        pred=self.model.predict(data)
+        if(pred.shape[-1]>len(self.target_indices)):
+            try:
+                return pred[:,:,self.target_indices]
+            except:
+                pass
+        return pred
 
 
 def get_data_for_keras( X_train,y_train,X_test,y_test,X_val,y_val):
@@ -233,22 +270,25 @@ def get_data_for_keras( X_train,y_train,X_test,y_test,X_val,y_val):
     val_ds = tf.data.Dataset.from_tensor_slices((X_val, y_val))
     
     return train_ds,test_ds,val_ds
-def get_data_for_ydf(X_train, y_train, X_test, y_test, X_val, y_val, source_cols, target_cols):
-    def make_ds_dict(X, y):
+def make_ds_dict(X, y=None):
  
         data_dict = {
        
         f"var {i}": X[:, :, i] for i in range(X.shape[2])
         }
-       
-        data_dict["targets"] = y.flatten()
+        if(y is not None):
+            data_dict["targets"] = y.flatten()
 
         return data_dict
-
-
-    train_ds_dicts = make_ds_dict(X_train, y_train)
-    test_ds_dicts = make_ds_dict(X_test, y_test)
-    val_ds_dicts = make_ds_dict(X_val, y_val)
+def get_data_for_ydf(X_train, y_train, X_test, y_test, X_val, y_val, source_cols, target_cols):
+    
+    train_ds_dicts,test_ds_dicts,val_ds_dicts=None
+    if(X_train and y_train):
+        train_ds_dicts = make_ds_dict(X_train, y_train)
+    if(X_test and y_test):
+        test_ds_dicts = make_ds_dict(X_test, y_test)
+    if(X_val and y_test):
+        val_ds_dicts = make_ds_dict(X_val, y_val)
 
     return train_ds_dicts, test_ds_dicts, val_ds_dicts
 

@@ -1,12 +1,13 @@
+from datetime import datetime
+
 from utils.window_generator import WindowGenerator
 from utils.preproces import trainTestSplit, preprocesDf,computeFeatures
-#import utils.dl_training as DL
-from utils.layers.transformer import transformer_timeseries
+import utils.layers.dl_training as DL
 import utils.multi_class_training as mc
 import utils.dl_layers as CustomLayers
 from  utils.dl_layers import AutoregressiveWrapperLSTM,GenerativeAdversialEncoderWrapper
 from utils.plotting import multiModelComparison
-from utils.layers.informer.informer import Informer
+
 import matplotlib.pyplot as plt
 from utils.algos import simple_backtest
 import pandas as pd
@@ -20,23 +21,34 @@ OUT_STEPS = 1
 INPUT_WIDTH=180
 MAX_EPOCHS = 100
 BATCH_SIZE=32
-df = pd.read_csv("commodity_futures.csv")
+output={}
+
+df = pd.read_csv("download.csv" )
+df.index = pd.to_datetime(df.index, format="%Y-%m-%d %H:%M:%S")
+
+#df.columns = [' '.join(col).strip() for col in df.columns.values]
+df=df.dropna()
+
 df=df.sample(frac=1).sort_index()
 # Shuffle the DataFrame
 
 # Split into 80/20
-split_idx = int(len(df) * 0.8)
+split_idx = int(len(df) * 1)
 validation_df = df[split_idx:]
 
 df = df[:split_idx]
 
 df = preprocesDf(df)
-print(df)
-df=computeFeatures(df)
+
 n=len(df)
-print(df)
-#target_cols = ["TARGET_close_AAPL"]
-target_cols=["COTTON"]
+
+print(df.corr())
+plt.matshow(df.corr())
+source_cols=df.columns
+target_cols=["Close SPY"]
+df = df.rename(columns={target_cols[0]: 'targets',})
+
+df=df.dropna()
 num_features = len(target_cols)
 in_features=len(df.columns)
 source_cols=df.columns
@@ -50,94 +62,50 @@ multi_window = WindowGenerator(
     train_df=train_df,
     val_df=val_df,
     test_df=test_df,
-    shift=OUT_STEPS,
-    label_columns=target_cols,
+    shift=2,
+    label_columns=["targets"],
 )
 
 
-
 X_train,y_train=multi_window.train
+real = np.exp(y_train.flatten().cumsum()) 
+
+
 X_test,y_test=multi_window.test
 X_val,y_val=multi_window.val
 
+# Calculate sample weights only for training set
+loss_magnitude = np.abs(np.minimum(y_train, 0))  # Only penalize negative returns
+sample_weights = 1.0 + (loss_magnitude / loss_magnitude.max()) * 4.0  # Scale up to 5x
+sample_weights=sample_weights.flatten()
 
-train_ds = tf.data.Dataset.from_tensor_slices((X_train, y_train)).batch(32)
-test_ds = tf.data.Dataset.from_tensor_slices((X_test, y_test)).batch(32)
-val_ds = tf.data.Dataset.from_tensor_slices((X_val, y_val)).batch(32)
 
-
+train_ds = tf.data.Dataset.from_tensor_slices((X_train, y_train, sample_weights)).batch(32)
+val_ds = tf.data.Dataset.from_tensor_slices((X_val, y_val)).batch(64)
+test_ds = tf.data.Dataset.from_tensor_slices((X_test, y_test)).batch(64)
 
 
 discriminator=CustomLayers.discriminator(OUT_STEPS, num_features)
 generator=CustomLayers.generator(32,OUT_STEPS, num_features)
 
-transformer=transformer_timeseries(
- 
-    input_shape= (INPUT_WIDTH,in_features),
-    head_size=32,
-    num_heads=4,
-    ff_dim=4,
-    num_transformer_blocks=4,
-    mlp_units=[32],
-    mlp_dropout=0.2,
-    dropout=0.25,
-
-    output_size=[OUT_STEPS,num_features]
-)
-
-
-informer = Informer(
-            enc_in= 7,
-    dec_in= 7,
-    c_out= 7,
-    seq_len= INPUT_WIDTH,
-    label_len= INPUT_WIDTH,
-    out_len= OUT_STEPS,
-    batch_size=BATCH_SIZE,
-    factor= 5,
-    d_model= 512,
-    n_heads= 8,
-    e_layers= 3,
-    d_layers= 2,
-    d_ff= 512,
-dropout= 0,
-    attn= 'prob',
-    embed= 'fixed',
-    data= 'ETTh',
-    activation= 'gelu'
-
-        )
-if False:
-    informer.compile(optimizer=tf.keras.optimizers.Adam(), loss=tf.keras.losses.mae, metrics=['mse', 'mae'],
-                            run_eagerly=True)
-    informer.fit(train_ds,
-                        steps_per_epoch=20,
-                        
-                        validation_steps=20,
-                        
-                        epochs=10)
-
 
 models = {
   #  "test":CustomLayers.ZeroBaseline(OUT_STEPS,num_features),
   #  "informer":informer,
-   "transformer":transformer,
+  "transformer":CustomLayers.transformer(INPUT_WIDTH,in_features,OUT_STEPS,num_features),
   "multi_dense_model":CustomLayers.multi_dense_model( INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
   #  "gan":GenerativeAdversialEncoderWrapper(OUT_STEPS=OUT_STEPS,generator=generator,discriminator=discriminator, num_features=in_features,),
-   #"ar_lstmstatefull_model":AutoregressiveWrapperLSTM(OUT_STEPS= OUT_STEPS,num_features=in_features),
-    "auto_encoder":CustomLayers.auto_encoder(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
- #   #"transformer_model":CustomLayers.random_forest(OUT_STEPS=OUT_STEPS, num_features=num_features),
-   
- 
-  "rnn_model": CustomLayers.rnn_model(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
-   "rnn_model_gru": CustomLayers.rnn_model_gru(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
-    "multi_dense_model":CustomLayers.multi_dense_model( INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
+  # "ar_lstmstatefull_model":AutoregressiveWrapperLSTM(OUT_STEPS= OUT_STEPS,num_features=in_features),
+    "auto_encoder":CustomLayers.auto_encoder(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),   
+     "cnn":CustomLayers.cnn_layer(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),   
+
+ # "rnn_model": CustomLayers.rnn_model(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
+ #  "rnn_model_gru": CustomLayers.rnn_model_gru(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
    #"extrarfsklearn":CustomLayers.extrarf(OUT_STEPS,num_features),
-   
+ "ydf":CustomLayers.gbt(OUT_STEPS,num_features),
 "hgb":CustomLayers.hgb(OUT_STEPS,num_features),
    "rfsklearn":CustomLayers.rf(OUT_STEPS,num_features),
 }
-
 
 # validate model adjusts to shape
 for name,model in models.items():
@@ -151,9 +119,10 @@ model_metrics = {}
 
 
 for name, model in models.items():
-    model=mc.MultiClassModel(
+    print(name)
+    models[name]=mc.MultiClassModel(
                         model=model,
-                        retrain=False,
+                        retrain=True,
                          model_name=name,
                          epochs=MAX_EPOCHS,
                          target_indices=multi_window.target_indices,
@@ -163,10 +132,15 @@ for name, model in models.items():
                          train_ds=train_ds,
                          test_ds=test_ds,  
                          val_ds=val_ds,
+                         train_dict=mc.make_ds_dict(X=X_train,y=y_train,),
+                        test_dict=mc.make_ds_dict(X=X_train,y=y_train),
+                        val_dict=mc.make_ds_dict(X=X_train,y=y_train),
                              )
    
-    models[name] = model.fit() 
-    metrics = model.evaluate()
+
+
+    models[name].fit(sample_weight=sample_weights) 
+    metrics = models[name].evaluate()
     model_metrics[name]=metrics
 
 # Plot all fitted models
@@ -180,121 +154,100 @@ for name, model in models.items():
 
 
 fig, axes = plt.subplots(2, len(models),  )
+import vectorbt as vbt
 
+def simplebacktest(real:pd.DataFrame,entries:pd.DataFrame,exits:pd.DataFrame)-> tuple[float, float, float, float, float]:
+    
+    real = np.exp(real.cumsum()) 
+    
+    pf = vbt.Portfolio.from_signals(real, entries, exits, init_cash=100,fees=0.001,sl_stop=0.05,tp_stop=0.1)
+    stats = pf.stats(silence_warnings=True) # Add silence_warnings=True here
+    win_rate=stats["Win Rate [%]"]
+    avg_losing=stats["Avg Losing Trade [%]"]
+    avg_winning=stats["Avg Winning Trade [%]"]
+    benchmark_return=stats["Win Rate [%]"]
+    benchmark_return=stats["Benchmark Return [%]"]
+    total_return=stats["Total Return [%]"]
+    return benchmark_return,total_return,avg_losing,avg_winning,win_rate
+    
 
 for idx, key in enumerate(model_metrics):
     model = models[key]
     forecast = model.predict(X_test).flatten()
+    true = y_test*std+mean
+    forecast=forecast*std+mean
+    if False:
+        ax_forecast = axes[0, idx]
+        ax_kde = axes[1, idx]
+        ax_forecast.plot(forecast.flatten(), label="Forecast")
+        ax_forecast.plot(true.flatten(), label="Real",alpha=0.3)
+        ax_forecast.set_title(key)
+        ax_forecast.legend()
+        ax_forecast.grid(True)
 
-    true = y_test
+        sns.kdeplot(forecast.flatten(), bw_adjust=0.5, ax=ax_kde,label="Forecast")
+        sns.kdeplot(true.flatten(), bw_adjust=0.5, ax=ax_kde,label="Real")
 
-    ax_forecast = axes[0, idx]
-    ax_kde = axes[1, idx]
-    ax_forecast.plot(forecast.flatten(), label="Forecast")
-    ax_forecast.plot(true.flatten(), label="Real")
-    ax_forecast.set_title(key)
-    ax_forecast.legend()
-    ax_forecast.grid(True)
-
-    sns.kdeplot(forecast.flatten(), bw_adjust=0.5, ax=ax_kde,label="Forecast")
-    sns.kdeplot(true.flatten(), bw_adjust=0.5, ax=ax_kde,label="Real")
-
-    ax_kde.set_title(f"KDE - {key}")
-    ax_kde.set_xlabel("Value")
-    ax_kde.set_ylabel("Density")
-    ax_kde.grid(True)
-    print(f"{key} - mse: {model_metrics[key]['mse']:.6f}, r2: {model_metrics[key]['r2']:.6f}")
-    # Optional backtest dataframe
+        ax_kde.set_title(f"KDE - {key}")
+        ax_kde.set_xlabel("Value")
+        ax_kde.set_ylabel("Density")
+        ax_kde.grid(True)
+        print(f"{key} - mse: {model_metrics[key]['mse']:.6f}, r2: {model_metrics[key]['r2']:.6f}")
+        # Optional backtest dataframe
     df = pd.DataFrame({"forecast": forecast.flatten(), "real": true.flatten()})
-    simple_backtest(df, real_column="real", forecast_column="forecast")
 
-
-plt.show()
-
-def process_row(previous_row,current_row):
-     
-     return np.log(previous_row /current_row).values
-
-def simulate_trading(model, val_df, input_width, target_col="target", threshold=0.000,mean=None,std=None):
-    """
-    Simulates a simple trading strategy using model predictions.
-    Decision: Buy if predicted return > +threshold, Sell if < -threshold, else Hold.
     
-    Returns:
-        - DataFrame with datetime, prediction, actual, action, returns, cumulative return.
-    """
 
-    current_model_input = []
-    records = []
+    entries=forecast > 0.0
+    exits=forecast < -0.0
 
-    for i in range(1, len(val_df) - 2):  # -1 to avoid index overflow
-        previous_row = val_df.iloc[i - 1]
-        current_row = val_df.iloc[i]
-        
-        # Compute log change
-        log_change = process_row(previous_row, current_row)
-        if mean is not None and std is not None:
-           log_change = (log_change - mean) / std
-           r=0
-        current_model_input.append(log_change)
+    benchmark_return,total_return,avg_losing,avg_winning,win_rate=simplebacktest(real=true.flatten(),entries=entries,exits=exits,)
+    if key not in output:
+        output[key] = {"r2": [], "total_return": []} # Initialize with empty lists if new
 
-        # Maintain window size
-        if len(current_model_input) > input_width:
-            current_model_input.pop(0)
+        # Append the current R2 and total_return to their respective lists
+    output[key]["r2"].append(model_metrics[key]['r2'])
+    output[key]["total_return"].append(total_return)
+    if False:
+        print(f"""
+        Strategy Evaluation: {key}
+        ---------------------------------------
+        Benchmark Return : {benchmark_return}
+        Total Return     : {total_return}
+        Win Rate         : {win_rate}
+        Avg Winning Trade: {avg_winning}
+        Avg Losing Trade : {avg_losing}
+        ---------------------------------------
+        """)
 
-        if len(current_model_input) == input_width:
-            
-            
-            
-            # Prepare input
-            model_input = np.vstack(current_model_input)[np.newaxis, :, :]
-            model_input = np.nan_to_num(model_input,0)
-            prediction = model.predict(model_input)
-            
-            prediction=prediction.flatten()  # Assume single float predicted: return or price delta
-            print(prediction)
-            # Compute actual return (log return)
-            actual = np.log(val_df.iloc[i + 2][target_col] / current_row[target_col])
-            
-            # Simple threshold-based decision
-            if prediction > threshold:
-                action = "buy"
-                realized_return = actual
-            else:
-                action = "hold"
-                realized_return = 0
+  # Extract data for plotting
+model_names = []
+r2_values = []
+total_return_values = []
 
-            records.append({
-             #   "datetime": val_df.iloc[i + 1]["datetime"],
-                "prediction": prediction,
-                "actual_return": actual,
-                "action": action,
-                "realized_return": realized_return
-            })
+for model_name, metrics in output.items():
+    model_names.append(model_name)
+    # Extract the single value from the list
+    r2_values.append(metrics['r2'][0])
+    total_return_values.append(metrics['total_return'][0]) 
 
-    # Build result DataFrame
-    df_result = pd.DataFrame(records)
-    df_result["cumulative_return"] = df_result["realized_return"].cumsum()
-    df_result["real_cumulative_return"] = df_result["actual_return"].cumsum()
+fig, axes = plt.subplots(2, 1, ) # Increased figure width for better readability
 
-    return df_result
+# Bar plot for R2 scores
+sns.barplot(x=model_names, y=r2_values, ax=axes[0], palette='viridis')
+axes[0].set_title('R2 Score for Each Model')
+axes[0].set_xlabel('Model')
+axes[0].set_ylabel('R2 Score')
+axes[0].grid(axis='y', linestyle='--', alpha=0.7)
 
+# Bar plot for Total Return
+sns.barplot(x=model_names, y=total_return_values, ax=axes[1], palette='plasma')
+axes[1].axhline(y=benchmark_return, color='red', linestyle='--', linewidth=1.5, label=f'Benchmark ({benchmark_return})')
+axes[1].set_title('Total Return for Each Model (Backtest)')
+axes[1].set_xlabel('Model')
+axes[1].set_ylabel('Total Return')
+axes[1].grid(axis='y', linestyle='--', alpha=0.7)
 
-date_time = pd.to_datetime(validation_df.pop("datetime"), format="%Y-%m-%d")
-result_df = simulate_trading(model, validation_df, input_width=180, target_col="COTTON", threshold=0.0)
+plt.tight_layout() # Adjust layout to prevent overlapping elements
 
-
-# Plot
-plt.figure(figsize=(12, 5))
-plt.plot( result_df["cumulative_return"], label="Cumulative Return", linewidth=2)
-plt.plot( result_df["real_cumulative_return"], label="real Return", linewidth=2)
-
-plt.title("Model Cumulative Return Over Time")
-plt.xlabel("Date")
-plt.ylabel("Cumulative Log Return")
-plt.grid(True)
-plt.legend()
-plt.tight_layout()
-plt.show()
-plt.plot(result_df["prediction"])
 plt.show()
