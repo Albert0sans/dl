@@ -23,13 +23,15 @@ MAX_EPOCHS = 100
 BATCH_SIZE=32
 output={}
 
-df = pd.read_csv("download.csv" )
+df = pd.read_csv("financial_data.csv",header=[0,1],index_col=0 )
+
 df.index = pd.to_datetime(df.index, format="%Y-%m-%d %H:%M:%S")
 
-#df.columns = [' '.join(col).strip() for col in df.columns.values]
+df.columns = [' '.join(col).strip() for col in df.columns.values]
 df=df.dropna()
 
 df=df.sample(frac=1).sort_index()
+print(len(df))
 # Shuffle the DataFrame
 
 # Split into 80/20
@@ -45,7 +47,7 @@ n=len(df)
 print(df.corr())
 plt.matshow(df.corr())
 source_cols=df.columns
-target_cols=["Close SPY"]
+target_cols=["close SPY"]
 df = df.rename(columns={target_cols[0]: 'targets',})
 
 df=df.dropna()
@@ -74,15 +76,7 @@ real = np.exp(y_train.flatten().cumsum())
 X_test,y_test=multi_window.test
 X_val,y_val=multi_window.val
 
-# Calculate sample weights only for training set
-loss_magnitude = np.abs(np.minimum(y_train, 0))  # Only penalize negative returns
-sample_weights = 1.0 + (loss_magnitude / loss_magnitude.max()) * 4.0  # Scale up to 5x
-sample_weights=sample_weights.flatten()
 
-
-train_ds = tf.data.Dataset.from_tensor_slices((X_train, y_train, sample_weights)).batch(32)
-val_ds = tf.data.Dataset.from_tensor_slices((X_val, y_val)).batch(64)
-test_ds = tf.data.Dataset.from_tensor_slices((X_test, y_test)).batch(64)
 
 
 discriminator=CustomLayers.discriminator(OUT_STEPS, num_features)
@@ -94,17 +88,17 @@ models = {
   #  "informer":informer,
   "transformer":CustomLayers.transformer(INPUT_WIDTH,in_features,OUT_STEPS,num_features),
   "multi_dense_model":CustomLayers.multi_dense_model( INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
-  #  "gan":GenerativeAdversialEncoderWrapper(OUT_STEPS=OUT_STEPS,generator=generator,discriminator=discriminator, num_features=in_features,),
+   "gan":GenerativeAdversialEncoderWrapper(OUT_STEPS=OUT_STEPS,generator=generator,discriminator=discriminator, num_features=in_features,),
   # "ar_lstmstatefull_model":AutoregressiveWrapperLSTM(OUT_STEPS= OUT_STEPS,num_features=in_features),
     "auto_encoder":CustomLayers.auto_encoder(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),   
-     "cnn":CustomLayers.cnn_layer(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),   
+    "cnn":CustomLayers.cnn_layer(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),   
 
- # "rnn_model": CustomLayers.rnn_model(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
+  "rnn_model": CustomLayers.rnn_model(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
  #  "rnn_model_gru": CustomLayers.rnn_model_gru(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
-   #"extrarfsklearn":CustomLayers.extrarf(OUT_STEPS,num_features),
- "ydf":CustomLayers.gbt(OUT_STEPS,num_features),
+ "extrarfsklearn":CustomLayers.extrarf(OUT_STEPS,num_features),
+ #"ydf":CustomLayers.gbt(OUT_STEPS,num_features),
 "hgb":CustomLayers.hgb(OUT_STEPS,num_features),
-   "rfsklearn":CustomLayers.rf(OUT_STEPS,num_features),
+#  "rfsklearn":CustomLayers.rf(OUT_STEPS,num_features),
 }
 
 # validate model adjusts to shape
@@ -129,17 +123,13 @@ for name, model in models.items():
                          X_train=X_train,y_train=y_train,
                          X_test=X_test,y_test=y_test,
                          X_val=X_val,y_val=y_val,
-                         train_ds=train_ds,
-                         test_ds=test_ds,  
-                         val_ds=val_ds,
-                         train_dict=mc.make_ds_dict(X=X_train,y=y_train,),
-                        test_dict=mc.make_ds_dict(X=X_train,y=y_train),
-                        val_dict=mc.make_ds_dict(X=X_train,y=y_train),
+                
+                        
                              )
    
 
 
-    models[name].fit(sample_weight=sample_weights) 
+    models[name].fit() 
     metrics = models[name].evaluate()
     model_metrics[name]=metrics
 
@@ -154,22 +144,7 @@ for name, model in models.items():
 
 
 fig, axes = plt.subplots(2, len(models),  )
-import vectorbt as vbt
 
-def simplebacktest(real:pd.DataFrame,entries:pd.DataFrame,exits:pd.DataFrame)-> tuple[float, float, float, float, float]:
-    
-    real = np.exp(real.cumsum()) 
-    
-    pf = vbt.Portfolio.from_signals(real, entries, exits, init_cash=100,fees=0.001,sl_stop=0.05,tp_stop=0.1)
-    stats = pf.stats(silence_warnings=True) # Add silence_warnings=True here
-    win_rate=stats["Win Rate [%]"]
-    avg_losing=stats["Avg Losing Trade [%]"]
-    avg_winning=stats["Avg Winning Trade [%]"]
-    benchmark_return=stats["Win Rate [%]"]
-    benchmark_return=stats["Benchmark Return [%]"]
-    total_return=stats["Total Return [%]"]
-    return benchmark_return,total_return,avg_losing,avg_winning,win_rate
-    
 
 for idx, key in enumerate(model_metrics):
     model = models[key]
@@ -201,13 +176,13 @@ for idx, key in enumerate(model_metrics):
     entries=forecast > 0.0
     exits=forecast < -0.0
 
-    benchmark_return,total_return,avg_losing,avg_winning,win_rate=simplebacktest(real=true.flatten(),entries=entries,exits=exits,)
+    
     if key not in output:
         output[key] = {"r2": [], "total_return": []} # Initialize with empty lists if new
 
         # Append the current R2 and total_return to their respective lists
     output[key]["r2"].append(model_metrics[key]['r2'])
-    output[key]["total_return"].append(total_return)
+    output[key]["total_return"].append(0)
     if False:
         print(f"""
         Strategy Evaluation: {key}
@@ -240,13 +215,8 @@ axes[0].set_xlabel('Model')
 axes[0].set_ylabel('R2 Score')
 axes[0].grid(axis='y', linestyle='--', alpha=0.7)
 
-# Bar plot for Total Return
-sns.barplot(x=model_names, y=total_return_values, ax=axes[1], palette='plasma')
-axes[1].axhline(y=benchmark_return, color='red', linestyle='--', linewidth=1.5, label=f'Benchmark ({benchmark_return})')
-axes[1].set_title('Total Return for Each Model (Backtest)')
-axes[1].set_xlabel('Model')
-axes[1].set_ylabel('Total Return')
-axes[1].grid(axis='y', linestyle='--', alpha=0.7)
+
+
 
 plt.tight_layout() # Adjust layout to prevent overlapping elements
 

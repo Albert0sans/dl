@@ -24,12 +24,7 @@ class MultiClassModel:
         y_test=None,
         X_val=None,
         y_val=None,
-        train_ds=None,
-        test_ds=None,
-        val_ds=None,
-        train_dict=None,
-        test_dict=None,
-        val_dict=None,
+
         
         
     ):
@@ -42,23 +37,39 @@ class MultiClassModel:
 
         self.mode_type= self.getType()
         assert self.mode_type != False 
-
-        
+        loss_magnitude = np.abs(np.minimum(y_train, 0))  # Only penalize negative returns
+        sample_weights = 1.0 + (loss_magnitude / loss_magnitude.max()) * 4.0  # Scale up to 5x
+        self.sample_weights=sample_weights.flatten()
+        assert (X_train is not None) & (y_train is not None) & (X_test is not None) & (y_test is not None)  & (X_val is not None) & (y_val is not None) 
         match self.mode_type:
             case "keras":
-                assert (train_ds is not None) & (test_ds is not None) &  (val_ds is not None)
                 self.model_path = f"./models/{model_name}.keras"
+                        # Calculate sample weights only for training set
+                
+
+
+                train_ds = tf.data.Dataset.from_tensor_slices((X_train, y_train, self.sample_weights)).batch(32)
+                val_ds = tf.data.Dataset.from_tensor_slices((X_val, y_val)).batch(32)
+                test_ds = tf.data.Dataset.from_tensor_slices((X_test, y_test)).batch(32)
+                self.train_ds=train_ds
+                self.test_ds=test_ds
+                self.val_ds=val_ds
             case "sklearn":
-                assert (X_train is not None) & (y_train is not None) & (X_test is not None) & (y_test is not None)  & (X_val is not None) & (y_val is not None) 
+               
                 self.model_path = f"./models/{model_name}.pkl"
 
             case "ydf":
-                assert (train_dict is not None) & (test_dict is not None) & (val_dict is not None)
+               
                 self.model_path = f"./models/{model_name}.pkl"
+
+                train_dict=make_ds_dict(X=X_train,y=y_train,),
+                test_dict=make_ds_dict(X=X_train,y=y_train),
+                val_dict=make_ds_dict(X=X_train,y=y_train),
+                self.train_dict=train_dict
+                self.test_dict=test_dict
+                self.val_dict=val_dict
                  
-        self.train_dict=train_dict
-        self.test_dict=test_dict
-        self.val_dict=val_dict
+
 
         self.X_train=X_train
         self.y_train=y_train
@@ -66,9 +77,12 @@ class MultiClassModel:
         self.y_test=y_test
         self.X_val=X_val
         self.Y_val=y_val
-        self.train_ds=train_ds
-        self.test_ds=test_ds
-        self.val_ds=val_ds
+
+
+        
+
+
+        
         
 
 
@@ -87,7 +101,8 @@ class MultiClassModel:
                return sklearn_code()
             case "ydf":
                return ydf_code()
-    def fit(self,sample_weight):
+    def fit(self,):
+        sample_weight=self.sample_weights
         self.runforeachclass(
            keras_code=lambda: self.fit_keras(
                                
@@ -318,11 +333,3 @@ def load_pickle_model(model_path):
         with open(model_path,"rb") as f:
                 return load(f)
     return False
-
-
-
-    
-        
-
-
-
