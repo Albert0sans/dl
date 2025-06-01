@@ -62,9 +62,9 @@ class MultiClassModel:
                
                 self.model_path = f"./models/{model_name}.pkl"
 
-                train_dict=make_ds_dict(X=X_train,y=y_train,),
-                test_dict=make_ds_dict(X=X_train,y=y_train),
-                val_dict=make_ds_dict(X=X_train,y=y_train),
+                train_dict=make_ds_dict(X=X_train,y=y_train,)
+                test_dict=make_ds_dict(X=X_train,y=y_train)
+                val_dict=make_ds_dict(X=X_train,y=y_train)
                 self.train_dict=train_dict
                 self.test_dict=test_dict
                 self.val_dict=val_dict
@@ -142,9 +142,9 @@ class MultiClassModel:
                 true_vals=test_dataset[1]
                 
             case "ydf":
-                test_dataset=self.test_dict
-                predictions=self.predict(test_dataset)
-                true_vals=test_dataset["targets"]
+                test_dataset=(self.X_test,self.y_test)
+                predictions=self.predict(test_dataset[0])
+                true_vals=test_dataset[1]
  
 
         mse = np.mean((true_vals- predictions) ** 2)
@@ -253,9 +253,10 @@ class MultiClassModel:
 
 
     def predict_ydf(self,data):
-       
+        
         if (not isinstance(data,dict)):
             data=make_ds_dict(X=data)
+            print(data)
             pred=self.model.predict(data)
         else:
             pred=self.model.predict(data)
@@ -286,10 +287,10 @@ def get_data_for_keras( X_train,y_train,X_test,y_test,X_val,y_val):
     
     return train_ds,test_ds,val_ds
 def make_ds_dict(X, y=None):
- 
+        print(np.shape(X))
         data_dict = {
        
-        f"var {i}": X[:, :, i] for i in range(X.shape[2])
+        f"{i}": X[:, :, i] for i in range(X.shape[2])
         }
         if(y is not None):
             data_dict["targets"] = y.flatten()

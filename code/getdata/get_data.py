@@ -22,12 +22,13 @@ import time
 from datetime import datetime, timedelta
 
 def get_tw_data(symbols=[
-    "SPY",
+    "IVV",
+
     "VIXM",
     "TLT",
     "GOLD",
     "RB=F"
-], start_date="2000-01-01", end_date=datetime.today(), your_api_key="YOUR_API_KEY", output_file="financial_data.csv"):
+], start_date="2000-01-01", end_date=datetime.today(), your_api_key="YOUR_API_KEY", output_file="financial_data2.csv"):
 
     base_url = "https://api.twelvedata.com/time_series"
     all_symbol_data = {}
@@ -41,7 +42,7 @@ def get_tw_data(symbols=[
         while True:
             params = {
                 "symbol": symbol,
-                "interval": "15min",
+                "interval": "1min",
                 "apikey": your_api_key,
                 "outputsize": 5000,
                 "format": "JSON",

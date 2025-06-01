@@ -7,15 +7,29 @@ import utils.multi_class_training as mc
 import utils.dl_layers as CustomLayers
 from  utils.dl_layers import AutoregressiveWrapperLSTM,GenerativeAdversialEncoderWrapper
 from utils.plotting import multiModelComparison
-
 import matplotlib.pyplot as plt
 from utils.algos import simple_backtest
 import pandas as pd
 import numpy as np
 import tensorflow as tf
 import seaborn as sns
+pd.set_option('display.max_columns', None)
 
+import vectorbt as vbt
 
+def simplebacktest(real:pd.DataFrame,entries:pd.DataFrame,exits:pd.DataFrame)-> tuple[float, float, float, float, float]:
+    
+    real = np.exp(real.cumsum()) 
+    
+    pf = vbt.Portfolio.from_signals(real, entries, exits, init_cash=100,fees=0.001,sl_stop=0.05,tp_stop=0.1)
+    stats = pf.stats(silence_warnings=True) # Add silence_warnings=True here
+    win_rate=stats["Win Rate [%]"]
+    avg_losing=stats["Avg Losing Trade [%]"]
+    avg_winning=stats["Avg Winning Trade [%]"]
+    benchmark_return=stats["Win Rate [%]"]
+    benchmark_return=stats["Benchmark Return [%]"]
+    total_return=stats["Total Return [%]"]
+    return benchmark_return,total_return,avg_losing,avg_winning,win_rate
 
 OUT_STEPS = 1
 INPUT_WIDTH=180
@@ -23,8 +37,9 @@ MAX_EPOCHS = 100
 BATCH_SIZE=32
 output={}
 
-df = pd.read_csv("financial_data.csv",header=[0,1],index_col=0 )
-
+df = pd.read_csv("financial_data2.csv",header=[0,1],index_col=0 )
+df=df.drop('VIXM', axis=1, level=1)
+print(df.isnull().sum())
 df.index = pd.to_datetime(df.index, format="%Y-%m-%d %H:%M:%S")
 
 df.columns = [' '.join(col).strip() for col in df.columns.values]
@@ -44,16 +59,20 @@ df = preprocesDf(df)
 
 n=len(df)
 
-print(df.corr())
-plt.matshow(df.corr())
 source_cols=df.columns
-target_cols=["close SPY"]
+target_cols=["close IVV"]
 df = df.rename(columns={target_cols[0]: 'targets',})
 
 df=df.dropna()
 num_features = len(target_cols)
 in_features=len(df.columns)
 source_cols=df.columns
+
+
+print(df.head(4))
+
+
+plt.show()
 
 
 train_df, test_df, val_df,mean,std = trainTestSplit(df)
@@ -86,18 +105,18 @@ generator=CustomLayers.generator(32,OUT_STEPS, num_features)
 models = {
   #  "test":CustomLayers.ZeroBaseline(OUT_STEPS,num_features),
   #  "informer":informer,
-  "transformer":CustomLayers.transformer(INPUT_WIDTH,in_features,OUT_STEPS,num_features),
-  "multi_dense_model":CustomLayers.multi_dense_model( INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
-   "gan":GenerativeAdversialEncoderWrapper(OUT_STEPS=OUT_STEPS,generator=generator,discriminator=discriminator, num_features=in_features,),
+  #"transformer":CustomLayers.transformer(INPUT_WIDTH,in_features,OUT_STEPS,num_features),
+  #"multi_dense_model":CustomLayers.multi_dense_model( INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
+  # "gan":GenerativeAdversialEncoderWrapper(OUT_STEPS=OUT_STEPS,generator=generator,discriminator=discriminator, num_features=in_features,),
   # "ar_lstmstatefull_model":AutoregressiveWrapperLSTM(OUT_STEPS= OUT_STEPS,num_features=in_features),
-    "auto_encoder":CustomLayers.auto_encoder(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),   
-    "cnn":CustomLayers.cnn_layer(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),   
+  #  "auto_encoder":CustomLayers.auto_encoder(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),   
+  #  "cnn":CustomLayers.cnn_layer(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),   
 
-  "rnn_model": CustomLayers.rnn_model(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
+ # "rnn_model": CustomLayers.rnn_model(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
  #  "rnn_model_gru": CustomLayers.rnn_model_gru(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
- "extrarfsklearn":CustomLayers.extrarf(OUT_STEPS,num_features),
- #"ydf":CustomLayers.gbt(OUT_STEPS,num_features),
-"hgb":CustomLayers.hgb(OUT_STEPS,num_features),
+ #"extrarfsklearn":CustomLayers.extrarf(OUT_STEPS,num_features),
+ "ydf":CustomLayers.gbt(OUT_STEPS,num_features),
+#"hgb":CustomLayers.hgb(OUT_STEPS,num_features),
 #  "rfsklearn":CustomLayers.rf(OUT_STEPS,num_features),
 }
 
@@ -146,8 +165,9 @@ for name, model in models.items():
 fig, axes = plt.subplots(2, len(models),  )
 
 
-for idx, key in enumerate(model_metrics):
-    model = models[key]
+
+for name, model in models.items():
+
     forecast = model.predict(X_test).flatten()
     true = y_test*std+mean
     forecast=forecast*std+mean
@@ -176,16 +196,16 @@ for idx, key in enumerate(model_metrics):
     entries=forecast > 0.0
     exits=forecast < -0.0
 
-    
-    if key not in output:
-        output[key] = {"r2": [], "total_return": []} # Initialize with empty lists if new
+    benchmark_return,total_return,avg_losing,avg_winning,win_rate=simplebacktest(real=true.flatten(),entries=entries,exits=exits,)
+    if name not in output:
+        output[name] = {"r2": [], "total_return": []} # Initialize with empty lists if new
 
         # Append the current R2 and total_return to their respective lists
-    output[key]["r2"].append(model_metrics[key]['r2'])
-    output[key]["total_return"].append(0)
+    output[name]["r2"].append(model_metrics[name]['r2'])
+    output[name]["total_return"].append(total_return)
     if False:
         print(f"""
-        Strategy Evaluation: {key}
+        Strategy Evaluation: {name}
         ---------------------------------------
         Benchmark Return : {benchmark_return}
         Total Return     : {total_return}
@@ -215,9 +235,12 @@ axes[0].set_xlabel('Model')
 axes[0].set_ylabel('R2 Score')
 axes[0].grid(axis='y', linestyle='--', alpha=0.7)
 
-
-
+# Bar plot for Total Return
+sns.barplot(x=model_names, y=total_return_values, ax=axes[1], palette='plasma')
+axes[1].axhline(y=benchmark_return, color='red', linestyle='--', linewidth=1.5, label=f'Benchmark ({benchmark_return})')
+axes[1].set_title('Total Return for Each Model (Backtest)')
+axes[1].set_xlabel('Model')
+axes[1].set_ylabel('Total Return')
+axes[1].grid(axis='y', linestyle='--', alpha=0.7)
 
 plt.tight_layout() # Adjust layout to prevent overlapping elements
-
-plt.show()
