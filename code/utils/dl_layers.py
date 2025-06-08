@@ -1,13 +1,13 @@
 from utils.sklearn3dwrapper import sklearn3dWrapper
 import tensorflow as tf
-import ydf
+#import ydf
 from sklearn.ensemble import RandomForestRegressor,ExtraTreesRegressor,HistGradientBoostingRegressor
 from sklearn.multioutput import MultiOutputRegressor
 #Input shape is: (look_back,forecast)
 import numpy as np
 from utils.layers.transformer import transformer_timeseries
 
-
+tf.config.set_visible_devices([], 'GPU')
 
 import tensorflow as tf
 from keras.saving import register_keras_serializable
@@ -54,7 +54,7 @@ def transformer(INPUT_WIDTH,in_features,OUT_STEPS,out_features):
     input_shape= (INPUT_WIDTH,in_features),
     head_size=32,
     num_heads=4,
-    ff_dim=4,
+    ff_dim=2,
     num_transformer_blocks=4,
     mlp_units=[32],
     mlp_dropout=0.2,
@@ -125,8 +125,163 @@ def rnn_model(OUT_STEPS,INPUT_WIDTH, in_features,out_features):
             tf.keras.layers.Reshape([OUT_STEPS, out_features]),
         ],
     )
+def cnnlstm1(OUT_STEPS, INPUT_WIDTH, in_features, out_features):
+    """
+    An improved CNN-LSTM model for time series forecasting.
 
+    Args:
+        OUT_STEPS (int): The number of future time steps to predict.
+        INPUT_WIDTH (int): The number of past time steps used as input.
+        in_features (int): The number of input features per time step.
+        out_features (int): The number of output features per time step.
 
+    Returns:
+        tf.keras.Sequential: The compiled Keras model.
+    """
+    model = tf.keras.Sequential(
+        name="cnn_lstm_improved",
+        layers=[
+            tf.keras.layers.Input(shape=(INPUT_WIDTH, in_features)),
+
+            # --- Improved Convolutional Block ---
+            # Increase filters for more feature learning capacity
+            tf.keras.layers.Conv1D(filters=32, kernel_size=5, padding="causal", activation="relu"),
+            # Batch Normalization for stable training and faster convergence
+            tf.keras.layers.BatchNormalization(),
+            # Dropout for regularization to prevent overfitting
+            tf.keras.layers.Dropout(0.3),
+
+           
+
+            # --- Improved LSTM Layers ---
+            # Increase LSTM units for greater capacity
+            # Use return_sequences=True to pass output to the next LSTM layer
+            # Added recurrent_dropout for regularization within the LSTM's recurrent connections
+            tf.keras.layers.LSTM(32, activation="relu", return_sequences=True, recurrent_dropout=0.2),
+            tf.keras.layers.Dropout(0.4), # Dropout after LSTM output
+
+            # Final LSTM layer, no return_sequences as it feeds into a Dense layer
+            tf.keras.layers.LSTM(16, activation="relu", recurrent_dropout=0.2),
+            tf.keras.layers.Dropout(0.4),
+            tf.keras.layers.Dense(32,),
+
+            # Output Dense Layer
+            tf.keras.layers.Dense(OUT_STEPS * out_features),
+
+            # Reshape to desired output dimensions [batch, out_steps, features]
+            tf.keras.layers.Reshape([OUT_STEPS, out_features]),
+        ],
+    )
+    return model
+def cnnlstm2(OUT_STEPS, INPUT_WIDTH, in_features, out_features):
+    """
+    An improved CNN-LSTM model for time series forecasting.
+
+    Args:
+        OUT_STEPS (int): The number of future time steps to predict.
+        INPUT_WIDTH (int): The number of past time steps used as input.
+        in_features (int): The number of input features per time step.
+        out_features (int): The number of output features per time step.
+
+    Returns:
+        tf.keras.Sequential: The compiled Keras model.
+    """
+    model = tf.keras.Sequential(
+        name="cnn_lstm_improved",
+        layers=[
+            tf.keras.layers.Input(shape=(INPUT_WIDTH, in_features)),
+
+            # --- Improved Convolutional Block ---
+            # Increase filters for more feature learning capacity
+            tf.keras.layers.Conv1D(filters=128, kernel_size=5, padding="causal", activation="relu"),
+            # Batch Normalization for stable training and faster convergence
+            tf.keras.layers.BatchNormalization(),
+            # Dropout for regularization to prevent overfitting
+            tf.keras.layers.Dropout(0.3),
+
+            tf.keras.layers.Conv1D(filters=128, kernel_size=3, padding="causal", activation="relu"),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.Dropout(0.3),
+
+            # A final Conv1D with fewer filters before LSTM
+            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding="causal", activation="relu"),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.Dropout(0.3),
+
+            # --- Improved LSTM Layers ---
+            # Increase LSTM units for greater capacity
+            # Use return_sequences=True to pass output to the next LSTM layer
+            # Added recurrent_dropout for regularization within the LSTM's recurrent connections
+            tf.keras.layers.LSTM(64, activation="relu", return_sequences=True, recurrent_dropout=0.2),
+            tf.keras.layers.Dropout(0.4), # Dropout after LSTM output
+
+            # Final LSTM layer, no return_sequences as it feeds into a Dense layer
+            tf.keras.layers.LSTM(32, activation="relu", recurrent_dropout=0.2),
+            tf.keras.layers.Dropout(0.4),
+
+            # Output Dense Layer
+            tf.keras.layers.Dense(OUT_STEPS * out_features),
+
+            # Reshape to desired output dimensions [batch, out_steps, features]
+            tf.keras.layers.Reshape([OUT_STEPS, out_features]),
+        ],
+    )
+    return model
+def cnnlstm3(OUT_STEPS, INPUT_WIDTH, in_features, out_features):
+    """
+    An improved CNN-LSTM model for time series forecasting.
+
+    Args:
+        OUT_STEPS (int): The number of future time steps to predict.
+        INPUT_WIDTH (int): The number of past time steps used as input.
+        in_features (int): The number of input features per time step.
+        out_features (int): The number of output features per time step.
+
+    Returns:
+        tf.keras.Sequential: The compiled Keras model.
+    """
+    model = tf.keras.Sequential(
+        name="cnn_lstm_improved",
+        layers=[
+            tf.keras.layers.Input(shape=(INPUT_WIDTH, in_features)),
+
+            # --- Improved Convolutional Block ---
+            # Increase filters for more feature learning capacity
+            tf.keras.layers.Conv1D(filters=128, kernel_size=5, padding="causal", activation="relu"),
+            # Batch Normalization for stable training and faster convergence
+            tf.keras.layers.BatchNormalization(),
+            # Dropout for regularization to prevent overfitting
+            tf.keras.layers.Dropout(0.3),
+
+            tf.keras.layers.Conv1D(filters=128, kernel_size=3, padding="causal", activation="relu"),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.Dropout(0.3),
+
+            # A final Conv1D with fewer filters before LSTM
+            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding="causal", activation="relu"),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.Dropout(0.3),
+
+            # --- Improved LSTM Layers ---
+            # Increase LSTM units for greater capacity
+            # Use return_sequences=True to pass output to the next LSTM layer
+            # Added recurrent_dropout for regularization within the LSTM's recurrent connections
+            tf.keras.layers.LSTM(64, activation="relu", return_sequences=True, recurrent_dropout=0.2),
+            tf.keras.layers.Dropout(0.4), # Dropout after LSTM output
+
+            # Final LSTM layer, no return_sequences as it feeds into a Dense layer
+            tf.keras.layers.LSTM(32, activation="relu", recurrent_dropout=0.2),
+            tf.keras.layers.Dropout(0.4),
+            tf.keras.layers.Dense(32, activation="relu"),
+            tf.keras.layers.Dense(32, activation="relu"),
+            # Output Dense Layer
+            tf.keras.layers.Dense(OUT_STEPS * out_features),
+
+            # Reshape to desired output dimensions [batch, out_steps, features]
+            tf.keras.layers.Reshape([OUT_STEPS, out_features]),
+        ],
+    )
+    return model
 def rnn_model_gru(OUT_STEPS,INPUT_WIDTH, in_features,out_features):
     return tf.keras.Sequential(
         name="rnn_model_gru",

@@ -1,14 +1,18 @@
+import pickle
 import tensorflow as tf
 from sklearn.metrics import mean_squared_error, r2_score
 from pickle import dump,load
 import os
 from scipy.stats import ttest_ind
-from ydf import GenericLearner
-import ydf
+
 from tensorflow.keras import Model as KerasModel
 from sklearn.base import BaseEstimator
 tf.keras.config.enable_unsafe_deserialization()
 import numpy as np
+import vectorbt as vbt
+print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
+
+
 
 class MultiClassModel:
     def __init__(
@@ -18,260 +22,135 @@ class MultiClassModel:
         target_indices,
         retrain=False,
         epochs=10,
-        X_train=None,
-        y_train=None,
-        X_test=None,
-        y_test=None,
-        X_val=None,
-        y_val=None,
+        batch_size=32,
 
-        
-        
     ):
-        self.retrain=retrain
-        self.model=model
-        self.model_name=model_name
-        self.target_indices=target_indices
-        self.epochs=epochs
-        assert isinstance(self.target_indices, list) and len(self.target_indices) < X_train.shape[-1]
-
-        self.mode_type= self.getType()
-        assert self.mode_type != False 
-        loss_magnitude = np.abs(np.minimum(y_train, 0))  # Only penalize negative returns
-        sample_weights = 1.0 + (loss_magnitude / loss_magnitude.max()) * 4.0  # Scale up to 5x
-        self.sample_weights=sample_weights.flatten()
-        assert (X_train is not None) & (y_train is not None) & (X_test is not None) & (y_test is not None)  & (X_val is not None) & (y_val is not None) 
-        match self.mode_type:
-            case "keras":
-                self.model_path = f"./models/{model_name}.keras"
-                        # Calculate sample weights only for training set
-                
+        self.retrain = retrain
+        self.model = model
+        self.model_name = model_name
+        self.target_indices = target_indices
+        self.epochs = epochs
+        self.batch_size=batch_size
+        
+        # Assertions for target_indices and generators
+        assert isinstance(self.target_indices, list) and len(self.target_indices) < 1000 # Adjusted assertion as X_train is not available
+       
 
 
-                train_ds = tf.data.Dataset.from_tensor_slices((X_train, y_train, self.sample_weights)).batch(32)
-                val_ds = tf.data.Dataset.from_tensor_slices((X_val, y_val)).batch(32)
-                test_ds = tf.data.Dataset.from_tensor_slices((X_test, y_test)).batch(32)
-                self.train_ds=train_ds
-                self.test_ds=test_ds
-                self.val_ds=val_ds
-            case "sklearn":
-               
-                self.model_path = f"./models/{model_name}.pkl"
-
-            case "ydf":
-               
-                self.model_path = f"./models/{model_name}.pkl"
-
-                train_dict=make_ds_dict(X=X_train,y=y_train,)
-                test_dict=make_ds_dict(X=X_train,y=y_train)
-                val_dict=make_ds_dict(X=X_train,y=y_train)
-                self.train_dict=train_dict
-                self.test_dict=test_dict
-                self.val_dict=val_dict
-                 
+        self.sample_weights = None 
 
 
-        self.X_train=X_train
-        self.y_train=y_train
-        self.X_test=X_test
-        self.y_test=y_test
-        self.X_val=X_val
-        self.Y_val=y_val
-
+        self.model_path = f"./models/{model_name}.keras"
+                        
 
         
-
-
+    def evaluate(self,test_dataset):
+        
+                # Keras prediction on a dataset directly
+        eval_ds,_=get_data_set(test_dataset)
+        eval_ds=eval_ds.batch(self.batch_size)
+        values=self.model.evaluate(eval_ds)
+              
+        metrics_dict = dict(zip(self.model.metrics_names, values))
+        return metrics_dict
+          
+    def fit(self,train_generator_fn,val_generator_fn, **kwargs):
+        assert (train_generator_fn is not None)  and (val_generator_fn is not None)
+        
+        train_generator,train_samples=get_data_set(train_generator_fn)
         
         
-
+        val_generator,val_samples=get_data_set(val_generator_fn)
 
         
-    def runforeachclass(
-        self,
-        keras_code,
-        sklearn_code,
-        ydf_code
-    ):
-         match self.mode_type:
-            
-            case "keras":
-               return  keras_code()
-            case "sklearn":
-               return sklearn_code()
-            case "ydf":
-               return ydf_code()
-    def fit(self,):
-        sample_weight=self.sample_weights
-        self.runforeachclass(
-           keras_code=lambda: self.fit_keras(
-                               
-                              ),
-           sklearn_code=lambda: self.fit_sklearn(self.model,self.X_train,self.y_train,sample_weight=sample_weight),
-           ydf_code=lambda: self.fit_ydf(self.model,self.train_dict,sample_weight=sample_weight)
-       )
-        return self.model
-     
+        train_generator_ds=train_generator.batch(32).repeat()
+        val_generator_ds=val_generator.batch(32).repeat()
+
+       
+        self.train_steps = train_samples // self.batch_size
+        self.val_steps = val_samples // self.batch_size
+        model = None
+        history = None
+        history_path = os.path.splitext(self.model_path)[0] + "_history.pkl"
+
+        # Try loading model and history if not retraining
+        if not self.retrain:
+            try:
+                model = load_keras_model(model_path=self.model_path)
+                if os.path.exists(history_path):
+                    with open(history_path, "rb") as f:
+                        history = pickle.load(f)
+                    print("Model and history loaded.")
+                else:
+                    print("Model loaded, but no history found.")
+            except Exception as e:
+                print(f"Could not load model: {e}")
+
+        if model is not None:
+            self.model = model
+            return history
+
+        # Compile model
+        self.model.compile(
+            loss="mse",
+            optimizer=tf.optimizers.Adam(learning_rate=1e-5, clipnorm=1.0),
+            metrics=[tf.metrics.MeanAbsoluteError()],
+        )
+
+        # Define callbacks
+       # early_stopping = tf.keras.callbacks.EarlyStopping(
+       #     monitor="val_loss",
+       #     patience=6,
+       #     restore_best_weights=True
+       # )
+
+        checkpoint = tf.keras.callbacks.ModelCheckpoint(
+            filepath=self.model_path,
+            monitor="val_loss",
+            save_best_only=True,
+            save_weights_only=False,
+            verbose=0
+        )
+
+        reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
+            monitor='val_loss',
+            factor=0.1,
+            patience=3,
+            min_lr=1e-5
+        )
+
+        # Fit model
+        history_obj = self.model.fit(
+            train_generator_ds,
+            epochs=self.epochs,
+            validation_data=val_generator_ds,
+            callbacks=[
+                       #arly_stopping, 
+                       checkpoint,
+                       reduce_lr],
+            verbose=1,
+            validation_steps=self.val_steps,
+            steps_per_epoch=self.train_steps,
+            **kwargs
+        )
+        
+        print(history_obj)
+        # Save history
+        
+        with open(history_path, "wb") as f:
+            pickle.dump(history_obj, f)
+
+        return history_obj
+
+   
+
     def predict(self,data):
         
         
-        pred = self.runforeachclass(
-           keras_code=lambda: self.predict_keras(data
-                               
-                              ),
-           sklearn_code=lambda: self.predict_sklearn(data),
-           ydf_code=lambda: self.predict_ydf(data)
-       )
-        return pred
-        
-     
-    def evaluate(self,test_dataset=None):
-        # Evaluate the model on the test dataset
-        
-        predictions=None
-        true_vals=None
-        match self.mode_type:
-            case "keras":
-                test_dataset=self.test_ds
-                predictions=self.predict(test_dataset)
-                true_vals=self.y_test
-                
-            case "sklearn":
-                test_dataset=(self.X_test,self.y_test)
-                predictions=self.predict(test_dataset[0])
-                true_vals=test_dataset[1]
-                
-            case "ydf":
-                test_dataset=(self.X_test,self.y_test)
-                predictions=self.predict(test_dataset[0])
-                true_vals=test_dataset[1]
- 
-
-        mse = np.mean((true_vals- predictions) ** 2)
-      
-        try:
-            r2 = r2_score(true_vals.flatten(), predictions.flatten())
-        except:
-            r2=0
-       
- 
-        p2=ttest_ind(true_vals.flatten(), predictions.flatten()).pvalue
-        
-
-        result=[mse,r2,p2]
-        names=["mse","r2","p2"]
-        if not isinstance(result, list):
-            result = [result]
-        # Map metric names to their corresponding values
-        metrics_dict = dict(zip(names, result))
-
-        return metrics_dict
-        
-    def fit_sklearn(self,model,X_train,y_train, **kwargs  ):
-        if(self.retrain is False):
-            model=load_pickle_model(self.model_path)
-            if(model is not False):
-                self.model=model
-                return self.model
-        
-
-        y_train=y_train.ravel()
-        self.model.fit(X_train,y_train, **kwargs  )
-        save_pickle_model(self.model,self.model_path)
-           
-        
-        return self.model
-    def fit_ydf(self,model,train_dict, **kwargs ):
-        if(self.retrain is False):
-            if(os.path.exists(self.model_path)):
-                model=ydf.load_model(self.model_path)
-                if(model is not False):
-                    self.model=model
-                    return self.model
-
-        self.model= model.train(train_dict)
-        self.model.save(self.model_path)
-    def getType(self,):
-        originalmodelinstance=self.model
-        if(hasattr(self.model,"model")):
-            originalmodelinstance=self.model.model
-        if isinstance(originalmodelinstance, KerasModel):
-            return "keras"
-        elif isinstance(originalmodelinstance, BaseEstimator):
-            return "sklearn"
-        elif isinstance(originalmodelinstance, GenericLearner):
-            return "ydf"
-        else:
-            return False
-        
-    def fit_keras(self,**kwargs):
-        model=False
-        if(self.retrain is False):
-            model= load_keras_model(model_path=self.model_path)
-        if(model is not False):
-            self.model=model
-            return
-        self.model.compile(
-                    loss=tf.losses.Huber(),
-                    optimizer=tf.optimizers.Adam(learning_rate=1e-4,clipnorm=1.0),
-                    metrics=[tf.metrics.MeanAbsoluteError()],
-                )
-                
-        early_stopping = tf.keras.callbacks.EarlyStopping(
-                    monitor="val_loss",
-                    patience=6,
-                  
-                    restore_best_weights=True
-                )
-        checkpoint = tf.keras.callbacks.ModelCheckpoint(
-                    filepath=self.model_path,  # or use 'best_model.keras' for the new format
-                    monitor="val_loss",
-                    save_best_only=True,
-                    save_weights_only=False,  # Set to True if you only want weights
-                 
-                    verbose=0
-                )
-
-        reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss',
-                                                    factor  =0.1,
-                                                        patience=3,
-                                                        min_lr=0.00001)
-
-        self.model.fit(
-                    self.train_ds,
-                    epochs=self.epochs,
-                    validation_data=self.val_ds,
-                    callbacks=[early_stopping,checkpoint,reduce_lr],
-                    verbose=1,
-                    steps_per_epoch=10,
-                     **kwargs  
-                    
-                )
-        return self.model
-        
-
-
-
-    def predict_ydf(self,data):
-        
-        if (not isinstance(data,dict)):
-            data=make_ds_dict(X=data)
-            print(data)
-            pred=self.model.predict(data)
-        else:
-            pred=self.model.predict(data)
-        return pred
-    def predict_keras(self,data):
-        pred=self.model.predict(data,verbose=0)
-        if(pred.shape[-1]>len(self.target_indices)):
-            try:
-                return pred[:,:,self.target_indices]
-            except:
-                pass
-        return pred
-    def predict_sklearn(self,data):
-        pred=self.model.predict(data)
-        if(pred.shape[-1]>len(self.target_indices)):
+        data_generator,_=get_data_set(data)
+        data_generator=data_generator.batch(self.batch_size)
+        pred = self.model.predict(data_generator,verbose=0)
+        if(pred.shape[-1] > len(self.target_indices)):
             try:
                 return pred[:,:,self.target_indices]
             except:
@@ -279,58 +158,160 @@ class MultiClassModel:
         return pred
 
 
-def get_data_for_keras( X_train,y_train,X_test,y_test,X_val,y_val):
 
-    train_ds = tf.data.Dataset.from_tensor_slices((X_train, y_train))
-    test_ds = tf.data.Dataset.from_tensor_slices((X_test, y_test))
-    val_ds = tf.data.Dataset.from_tensor_slices((X_val, y_val))
-    
-    return train_ds,test_ds,val_ds
-def make_ds_dict(X, y=None):
-        print(np.shape(X))
-        data_dict = {
-       
-        f"{i}": X[:, :, i] for i in range(X.shape[2])
-        }
-        if(y is not None):
-            data_dict["targets"] = y.flatten()
-
-        return data_dict
-def get_data_for_ydf(X_train, y_train, X_test, y_test, X_val, y_val, source_cols, target_cols):
-    
-    train_ds_dicts,test_ds_dicts,val_ds_dicts=None
-    if(X_train and y_train):
-        train_ds_dicts = make_ds_dict(X_train, y_train)
-    if(X_test and y_test):
-        test_ds_dicts = make_ds_dict(X_test, y_test)
-    if(X_val and y_test):
-        val_ds_dicts = make_ds_dict(X_val, y_val)
-
-    return train_ds_dicts, test_ds_dicts, val_ds_dicts
-
-    
-    
 tf.keras.config.enable_unsafe_deserialization()
 
 def load_keras_model(model_path):
-    
     if os.path.exists(model_path):
         print(f"Loading existing model from {model_path}")
-       
-        new_model = tf.keras.models.load_model(model_path)
-       
+        new_model = tf.keras.models.load_model(model_path, custom_objects={'stock_return_loss': stock_return_loss})
         return new_model
     return False
-
-    
     
 def save_pickle_model(model,model_path):
     with open(model_path,"wb+") as f:
         dump(model,f,protocol=5)
 
 def load_pickle_model(model_path):
-    
     if os.path.exists(model_path):
         with open(model_path,"rb") as f:
                 return load(f)
     return False
+
+def simplebacktest(y_true,y_pred)-> tuple[float, float, float, float, float]:
+    y_true = tf.cast(y_true, tf.float32)
+    y_pred = tf.cast(y_pred, tf.float32)
+    entries = y_pred > 0.0
+    exits = y_pred < -0.0
+    
+    pf = vbt.Portfolio.from_signals(y_true, entries, exits, init_cash=100,fees=0.001,sl_stop=0.05,tp_stop=0.1)
+    stats = pf.stats(silence_warnings=True)
+    win_rate = stats["Win Rate [%]"]
+    avg_losing = stats["Avg Losing Trade [%]"]
+    avg_winning = stats["Avg Winning Trade [%]"]
+    benchmark_return = stats["Benchmark Return [%]"]
+    total_return = stats["Total Return [%]"]
+    return total_return - benchmark_return
+
+def differentiable_sum_binary_sequences(binary_array, steepness=100.0):
+  binary_array = tf.cast(binary_array, dtype=tf.float32)
+  shifted_array_next = tf.roll(binary_array, shift=-1, axis=0)
+
+  is_one = tf.sigmoid(steepness * (binary_array - 0.5))
+  is_zero = tf.sigmoid(steepness * (0.5 - binary_array))
+
+  approx_10_sequence = is_one[:-1] * tf.sigmoid(steepness * (0.5 - shifted_array_next[:-1]))
+  approx_01_sequence = is_zero[:-1] * tf.sigmoid(steepness * (shifted_array_next[:-1] - 0.5))
+
+  total_approx_sum = tf.reduce_sum(approx_10_sequence) + tf.reduce_sum(approx_01_sequence)
+  return total_approx_sum
+
+def profit_loss_differentiable(y_true, y_pred):
+    fees = tf.constant(0.001, dtype=tf.float32) 
+    batch_size = tf.shape(y_pred)[0]
+    num_features = tf.shape(y_pred)[2]
+
+    # This part might need adjustment depending on how your y_pred is structured for time series
+    # and how you want to handle the "initial trade signal".
+    # The original code's `shifted_y_pred` seems to be trying to bring values from the future.
+    # If `y_pred` is (batch, sequence_length, features), shifting `y_pred` itself might be more appropriate.
+    # For a general solution, let's assume `y_pred` is aligned with `y_true`.
+    
+    # If the intention was to shift y_pred for entries/exits logic,
+    # consider how `initial_trade_signal` is used or if `tf.roll` on `y_pred` is sufficient.
+    # For now, I'll simplify `shifted_y_pred` to just `y_pred` for clarity in this context.
+    # If your model predicts at time `t` for `t+1`, then `y_pred` might need to be shifted to align with `y_true` (actual returns at `t+1`).
+
+    y_true = tf.cast(y_true, tf.float32)
+    y_pred = tf.cast(y_pred, tf.float32) # Using original y_pred for signals
+
+    entries = tf.sigmoid(10000000000 * (y_pred)) # Approximating binary entry decision
+    ops = differentiable_sum_binary_sequences(tf.squeeze(entries, axis=-1)) # Squeeze if entries has a feature dimension of 1
+    fees_incurred = tf.math.log(1.0 - fees) * ops
+
+    # Realized returns should align with actual price movements when a position is open
+    # This simplified version assumes `entries` directly gates `y_true`.
+    realized_returns = entries * y_true
+    
+    total_profit = (tf.exp(tf.reduce_sum(realized_returns) + fees_incurred) - 1) * 100.0
+    
+    # Calculate a benchmark return for comparison if needed
+    total_return_factor = tf.exp(tf.reduce_sum(y_true))
+    total_return = (total_return_factor - 1) * 100
+    
+    # Return negative of profit/benchmark to minimize (maximize profit)
+    # Handle cases where total_return might be zero to avoid division by zero
+    return -tf.reduce_mean(total_profit / (total_return + tf.keras.backend.epsilon()))
+
+def profit_loss(y_true, y_pred):
+    y_true = tf.cast(y_true, tf.float32)
+    y_pred = tf.cast(y_pred, tf.float32)
+
+    entries = tf.where(y_pred > 0, 1.0, tf.where(y_pred < 0, -1.0, 0.0))
+    exits = tf.where(y_pred > 0, 0.0, tf.where(y_pred < 0, -1.0, 0.0))
+
+    transitions = tf.cast(entries - exits, tf.float32)
+    in_market = tf.clip_by_value(tf.cumsum(transitions), 0.0, 1.0)
+    realized_returns = in_market * y_true
+    total_profit = (tf.exp(tf.reduce_sum(realized_returns)) - 1.0) * 100.0
+    return -total_profit
+
+from tensorflow.keras import backend as K
+
+from keras import saving
+@saving.register_keras_serializable()
+def stock_return_loss(y_true, y_pred):
+      # Asegúrate de que y_true y y_pred sean tensores de TensorFlow
+    y_true = tf.cast(y_true, tf.float32)
+    y_pred = tf.cast(y_pred, tf.float32)
+
+    # Calcula el signo de cada valor
+    sign_true = tf.sign(y_true)
+    sign_pred = tf.sign(y_pred)
+
+    # Si y_true es 0, podemos definir el signo de y_pred como "correcto"
+    # si también es 0, o dejar que el modelo aprenda a predecir 0.
+    # Para simplificar, asumiremos que los valores reales no son exactamente 0
+    # o que 0 se considera un "signo" neutro que no penaliza si la predicción es 0.
+
+    # Penalización si los signos son diferentes
+    # Usamos tf.not_equal para obtener un booleano (True si son diferentes, False si son iguales)
+    # y luego tf.cast para convertirlo a float (1.0 si son diferentes, 0.0 si son iguales).
+    # Multiplicamos por un factor de penalización si los signos no coinciden.
+    sign_mismatch_penalty = tf.cast(tf.not_equal(sign_true, sign_pred), tf.float32) * 10.0 # Ajusta el peso según la importancia
+
+    # También puedes añadir una pequeña penalización por la magnitud si lo deseas,
+    # pero con un peso mucho menor que la penalización por el signo.
+    # Por ejemplo, un MSE/MAE muy pequeño para cuando los signos coinciden.
+    magnitude_error = tf.square(y_true - y_pred) # O tf.abs(y_true - y_pred)
+    
+    # Combinar las penalizaciones
+    # Solo aplica la penalización de magnitud si los signos son los mismos.
+    # Si los signos son diferentes, la penalización principal es por el signo.
+    
+    # Crear una máscara donde los signos son iguales
+    signs_are_equal = tf.cast(tf.equal(sign_true, sign_pred), tf.float32)
+    
+    # Penalización total: gran penalización si los signos no coinciden,
+    # y una penalización de magnitud (pequeña) si los signos coinciden.
+    loss = (sign_mismatch_penalty) + (magnitude_error * signs_are_equal * 0.1) # 0.1 es un peso pequeño para la magnitud
+
+    return tf.reduce_mean(loss)
+        
+        
+def get_data_set(generator_fn)->tuple[tf.data.Dataset,int]:
+    data_tmp=generator_fn()
+    sample_X_train, sample_y_train = next(iter(data_tmp))
+    
+
+    ds= tf.data.Dataset.from_generator(
+                    generator_fn,
+                    output_signature=(
+                        tf.TensorSpec(shape=(sample_X_train.shape), dtype=tf.float32),
+                        tf.TensorSpec(shape=(sample_y_train.shape), dtype=tf.float32)
+                    )
+                )
+    total=sum(1 for _ in data_tmp)+1
+
+    return ds,total
+    

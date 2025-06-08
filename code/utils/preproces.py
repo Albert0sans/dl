@@ -5,13 +5,47 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 
-def preprocesDf(df:pd.DataFrame):
+def preprocesDf(df:pd.DataFrame,target_col:str):
 
 
     ## change target close values for future log returns
     # Sample assumption: target_columns contains non-price columns like 'Date', 'Ticker', etc.
 
     df=df.dropna()
+    target_col="close IVV"
+    print(df.index)
+    
+        
+    # Create future time-shifted DataFrames
+    future_week = df[[target_col]].copy()
+    future_week.index = future_week.index + pd.Timedelta(days=7)
+    future_week = future_week.rename(columns={target_col: 'future_week_price'})
+
+    future_month = df[[target_col]].copy()
+    future_month.index = future_month.index + pd.Timedelta(days=30)
+    future_month = future_month.rename(columns={target_col: 'future_month_price'})
+
+    #future_year = df[[target_col]].copy()
+    #future_year.index = future_year.index + pd.Timedelta(days=90)
+    #future_year = future_year.rename(columns={target_col: 'future_year_price'})
+
+    # Join back to original df
+    #df = df.join(future_week, how='left')
+    #df = df.join(future_month, how='left')
+   # df = df.join(future_year, how='left')
+
+    # Calculate log returns
+    #df["target_next_week_return"] = np.log(df["future_week_price"] / df[target_col])
+    #df["target_next_month_return"] = np.log(df["future_month_price"] / df[target_col])
+    #df["target_next_year_return"] = np.log(df["future_year_price"] / df[target_col])
+    
+    # Drop intermediate price columns
+   # df.drop(columns=["future_week_price",
+    #                 "future_month_price", 
+     #                #"future_year_price"
+      #               ], inplace=True)
+    
+    
     for target in df.columns:
         
         
@@ -24,18 +58,19 @@ def preprocesDf(df:pd.DataFrame):
         with np.errstate(divide='ignore', invalid='ignore'):
         # Compute log returns using current price and previous day's price
             log_returns[1:] = np.log(np.where(prices[:-1] != 0, prices[1:] / prices[:-1], 1))
-
-        # Optionally: create a new column to store the log returns
+        if(target==target_col):
+            df[f"target_{target}"] = log_returns
         df[target] = log_returns
+    print(np.shape(df))
+    
     df=computeFeatures(df)
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
 
     df=df.fillna(0)
     
     df = df.loc[:, (df != 0).any(axis=0)]
-    df = df[(df.T != 0).any()]
-    print(df)
-    
+    df = df[(df.T != 0).any()]  
+    print(np.shape(df))  
     return df
 
 def computeFeatures(df):
@@ -51,13 +86,13 @@ def computeFeatures(df):
     
     df=compute_time_feat(df)
 
-    df = df.dropna()  # Remove rows with NaNs from rolling/lags
+    #df = df.dropna()  # Remove rows with NaNs from rolling/lags
 
     return df
 
 
 
-def trainTestSplit(df):
+def trainTestSplit(df,label_columns):
     n = len(df)
     train_df = df[0 : int(n * 0.7)]
     val_df = df[int(n * 0.7) : int(n * 0.9)]
@@ -70,10 +105,7 @@ def trainTestSplit(df):
     val_df = (val_df - train_mean) / train_std
     test_df = (test_df - train_mean) / train_std
 
-    target_mean = train_mean["targets"]
-    target_std = train_std["targets"]
-
-    return train_df, test_df, val_df, target_mean, target_std
+    return train_df, test_df, val_df, train_mean[label_columns], train_std[label_columns]
 
 def compute_time_feat(df: pd.DataFrame) -> pd.DataFrame:
     """

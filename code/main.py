@@ -12,31 +12,50 @@ from utils.algos import simple_backtest
 import pandas as pd
 import numpy as np
 import tensorflow as tf
+from tensorflow.keras import mixed_precision
+policy = mixed_precision.Policy('float16')
+mixed_precision.set_global_policy(policy)
 import seaborn as sns
 pd.set_option('display.max_columns', None)
+physical_devices = tf.config.list_physical_devices()
+print(f"Physical devices: {physical_devices}")
 
 import vectorbt as vbt
 
-def simplebacktest(real:pd.DataFrame,entries:pd.DataFrame,exits:pd.DataFrame)-> tuple[float, float, float, float, float]:
-    
-    real = np.exp(real.cumsum()) 
-    
-    pf = vbt.Portfolio.from_signals(real, entries, exits, init_cash=100,fees=0.001,sl_stop=0.05,tp_stop=0.1)
+
+
+
+
+def simplebacktest(y_true,y_pred)-> tuple[float, float, float, float, float]:
+    print(np.shape(y_pred))
+    print(np.shape(y_true))
+    entries=y_pred > 0.0
+    exits=y_pred < -0.0
+    y_true = np.exp(y_true.cumsum()) 
+
+    test=(y_true*entries).cumsum()
+
+    pf = vbt.Portfolio.from_signals(y_true, entries, exits, init_cash=100,fees=0.001,sl_stop=0.05,tp_stop=0.1)
     stats = pf.stats(silence_warnings=True) # Add silence_warnings=True here
+
+
     win_rate=stats["Win Rate [%]"]
     avg_losing=stats["Avg Losing Trade [%]"]
     avg_winning=stats["Avg Winning Trade [%]"]
     benchmark_return=stats["Win Rate [%]"]
     benchmark_return=stats["Benchmark Return [%]"]
     total_return=stats["Total Return [%]"]
+    
     return benchmark_return,total_return,avg_losing,avg_winning,win_rate
 
+price_target="close IVV"
+
+
 OUT_STEPS = 1
-INPUT_WIDTH=180
-MAX_EPOCHS = 100
+INPUT_WIDTH=10000
+MAX_EPOCHS = 200
 BATCH_SIZE=32
 output={}
-
 df = pd.read_csv("financial_data2.csv",header=[0,1],index_col=0 )
 df=df.drop('VIXM', axis=1, level=1)
 print(df.isnull().sum())
@@ -45,7 +64,7 @@ df.index = pd.to_datetime(df.index, format="%Y-%m-%d %H:%M:%S")
 df.columns = [' '.join(col).strip() for col in df.columns.values]
 df=df.dropna()
 
-df=df.sample(frac=1).sort_index()
+df=df.sample(frac=0.2).sort_index()
 print(len(df))
 # Shuffle the DataFrame
 
@@ -55,27 +74,30 @@ validation_df = df[split_idx:]
 
 df = df[:split_idx]
 
-df = preprocesDf(df)
-
+df = preprocesDf(df,price_target)
+print(np.shape(df))
 n=len(df)
 
 source_cols=df.columns
-target_cols=["close IVV"]
-df = df.rename(columns={target_cols[0]: 'targets',})
+label_columns=[col for col in df.columns if col.startswith('target')]
+source_cols_notarget=[col for col in df.columns if not col.startswith('target')]
+in_features=len(source_cols_notarget)
 
 df=df.dropna()
-num_features = len(target_cols)
-in_features=len(df.columns)
+num_features = len(label_columns)
+
 source_cols=df.columns
 
 
-print(df.head(4))
 
 
-plt.show()
+train_df, test_df, val_df,mean,std = trainTestSplit(df,label_columns)
 
 
-train_df, test_df, val_df,mean,std = trainTestSplit(df)
+
+mean=mean.values.reshape(1,OUT_STEPS,num_features)
+std=std.values.reshape(1,OUT_STEPS,num_features)
+
 
 multi_window = WindowGenerator(
     input_width=INPUT_WIDTH,
@@ -83,17 +105,22 @@ multi_window = WindowGenerator(
     train_df=train_df,
     val_df=val_df,
     test_df=test_df,
-    shift=2,
-    label_columns=["targets"],
+    shift=1,
+    label_columns=label_columns,
 )
 
 
-X_train,y_train=multi_window.train
-real = np.exp(y_train.flatten().cumsum()) 
+
+del df,train_df,val_df,test_df
 
 
-X_test,y_test=multi_window.test
-X_val,y_val=multi_window.val
+train_generator=multi_window.train
+
+
+
+test_generator=multi_window.test
+val_generator=multi_window.val
+
 
 
 
@@ -104,9 +131,9 @@ generator=CustomLayers.generator(32,OUT_STEPS, num_features)
 
 models = {
   #  "test":CustomLayers.ZeroBaseline(OUT_STEPS,num_features),
-  #  "informer":informer,
-  #"transformer":CustomLayers.transformer(INPUT_WIDTH,in_features,OUT_STEPS,num_features),
-  #"multi_dense_model":CustomLayers.multi_dense_model( INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
+   # "informer":informer,
+ #"transformer":CustomLayers.transformer(INPUT_WIDTH,in_features,OUT_STEPS,num_features),
+  "multi_dense_model":CustomLayers.multi_dense_model( INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
   # "gan":GenerativeAdversialEncoderWrapper(OUT_STEPS=OUT_STEPS,generator=generator,discriminator=discriminator, num_features=in_features,),
   # "ar_lstmstatefull_model":AutoregressiveWrapperLSTM(OUT_STEPS= OUT_STEPS,num_features=in_features),
   #  "auto_encoder":CustomLayers.auto_encoder(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),   
@@ -115,7 +142,11 @@ models = {
  # "rnn_model": CustomLayers.rnn_model(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
  #  "rnn_model_gru": CustomLayers.rnn_model_gru(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),
  #"extrarfsklearn":CustomLayers.extrarf(OUT_STEPS,num_features),
- "ydf":CustomLayers.gbt(OUT_STEPS,num_features),
+ #"cnnlstm1":CustomLayers.cnnlstm1(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),   
+ # "cnnlstm2":CustomLayers.cnnlstm2(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),   
+ #"cnnlstm3":CustomLayers.cnnlstm3(INPUT_WIDTH=INPUT_WIDTH,OUT_STEPS=OUT_STEPS,in_features=in_features, out_features=num_features),   
+
+#"ydf":CustomLayers.gbt(OUT_STEPS,num_features),
 #"hgb":CustomLayers.hgb(OUT_STEPS,num_features),
 #  "rfsklearn":CustomLayers.rf(OUT_STEPS,num_features),
 }
@@ -130,7 +161,6 @@ for name,model in models.items():
 model_metrics = {}
 
 
-
 for name, model in models.items():
     print(name)
     models[name]=mc.MultiClassModel(
@@ -139,17 +169,28 @@ for name, model in models.items():
                          model_name=name,
                          epochs=MAX_EPOCHS,
                          target_indices=multi_window.target_indices,
-                         X_train=X_train,y_train=y_train,
-                         X_test=X_test,y_test=y_test,
-                         X_val=X_val,y_val=y_val,
-                
-                        
+                      
                              )
    
 
-
-    models[name].fit() 
-    metrics = models[name].evaluate()
+    
+    history=models[name].fit(
+          train_generator_fn=lambda:multi_window.train,
+          val_generator_fn=lambda:multi_window.val
+    ) 
+    
+    history=history.history
+    
+    
+    plt.plot(history['loss'], label='Train Loss')
+    plt.plot(history['val_loss'], label='Validation Loss')
+    plt.title('Model Loss')
+    plt.ylabel('Loss')
+    plt.xlabel('Epoch')
+    plt.legend()
+    plt.grid(True)
+   # plt.show()
+    metrics = models[name].evaluate(lambda:multi_window.test)
     model_metrics[name]=metrics
 
 # Plot all fitted models
@@ -159,88 +200,83 @@ for name, model in models.items():
 
 #multi_window.plot(list(models.values()), plot_col=target_cols[0])
 
+# First, get all true y values from the generator
+   
 
-
-
-fig, axes = plt.subplots(2, len(models),  )
-
-
-
+# The rest remains the same
 for name, model in models.items():
+    test_generator=multi_window.test
+    y_test_batches = []
+    for x,y in test_generator:  # assuming test_generator has __len__ defined
+        
+        y_test_batches.append(y)
+    
+    y_test = np.concatenate(y_test_batches)
+    # Predict using the generator without loading all X_test at once
+    forecast = models[name].predict(lambda:multi_window.test)
+    # Now apply inverse scaling
+    true = (y_test * std + mean)
+    forecast = (forecast * std + mean)
 
-    forecast = model.predict(X_test).flatten()
-    true = y_test*std+mean
-    forecast=forecast*std+mean
-    if False:
-        ax_forecast = axes[0, idx]
-        ax_kde = axes[1, idx]
-        ax_forecast.plot(forecast.flatten(), label="Forecast")
-        ax_forecast.plot(true.flatten(), label="Real",alpha=0.3)
-        ax_forecast.set_title(key)
-        ax_forecast.legend()
-        ax_forecast.grid(True)
+    plt.plot(true.flatten())
+    plt.plot(forecast.flatten())
 
-        sns.kdeplot(forecast.flatten(), bw_adjust=0.5, ax=ax_kde,label="Forecast")
-        sns.kdeplot(true.flatten(), bw_adjust=0.5, ax=ax_kde,label="Real")
 
-        ax_kde.set_title(f"KDE - {key}")
-        ax_kde.set_xlabel("Value")
-        ax_kde.set_ylabel("Density")
-        ax_kde.grid(True)
-        print(f"{key} - mse: {model_metrics[key]['mse']:.6f}, r2: {model_metrics[key]['r2']:.6f}")
-        # Optional backtest dataframe
     df = pd.DataFrame({"forecast": forecast.flatten(), "real": true.flatten()})
+
+    benchmark_return, total_return, avg_losing, avg_winning, win_rate = simplebacktest(true, forecast[:, :, 0])
+
+    model_metrics[name]["total_return"]= total_return
 
     
 
-    entries=forecast > 0.0
-    exits=forecast < -0.0
-
-    benchmark_return,total_return,avg_losing,avg_winning,win_rate=simplebacktest(real=true.flatten(),entries=entries,exits=exits,)
-    if name not in output:
-        output[name] = {"r2": [], "total_return": []} # Initialize with empty lists if new
-
-        # Append the current R2 and total_return to their respective lists
-    output[name]["r2"].append(model_metrics[name]['r2'])
-    output[name]["total_return"].append(total_return)
-    if False:
-        print(f"""
-        Strategy Evaluation: {name}
-        ---------------------------------------
-        Benchmark Return : {benchmark_return}
-        Total Return     : {total_return}
-        Win Rate         : {win_rate}
-        Avg Winning Trade: {avg_winning}
-        Avg Losing Trade : {avg_losing}
-        ---------------------------------------
-        """)
-
-  # Extract data for plotting
-model_names = []
-r2_values = []
-total_return_values = []
-
-for model_name, metrics in output.items():
-    model_names.append(model_name)
-    # Extract the single value from the list
-    r2_values.append(metrics['r2'][0])
-    total_return_values.append(metrics['total_return'][0]) 
+    print(f"""
+    Strategy Evaluation: {name}
+    ---------------------------------------
+    Benchmark Return : {benchmark_return}
+    Total Return     : {total_return}
+    Win Rate         : {win_rate}
+    Avg Winning Trade: {avg_winning}
+    Avg Losing Trade : {avg_losing}
+    ---------------------------------------
+    """)
 
 fig, axes = plt.subplots(2, 1, ) # Increased figure width for better readability
+print(model_metrics)
 
-# Bar plot for R2 scores
-sns.barplot(x=model_names, y=r2_values, ax=axes[0], palette='viridis')
-axes[0].set_title('R2 Score for Each Model')
-axes[0].set_xlabel('Model')
-axes[0].set_ylabel('R2 Score')
-axes[0].grid(axis='y', linestyle='--', alpha=0.7)
 
+model_names=list(models.keys())
+total_return_values = [model_metrics[model]['total_return'] for model in model_names]
+
+# Create a DataFrame for the remaining metrics
+remaining_metrics_data = []
+for model_name, metrics in model_metrics.items():
+    for metric_name, value in metrics.items():
+        if metric_name != 'total_return':
+            remaining_metrics_data.append({'Model': model_name, 'Metric': metric_name, 'Value': value})
+
+df_remaining_metrics = pd.DataFrame(remaining_metrics_data)
 # Bar plot for Total Return
-sns.barplot(x=model_names, y=total_return_values, ax=axes[1], palette='plasma')
-axes[1].axhline(y=benchmark_return, color='red', linestyle='--', linewidth=1.5, label=f'Benchmark ({benchmark_return})')
+sns.barplot(x=model_names, y=total_return_values, ax=axes[1])
+axes[1].axhline(y=benchmark_return, color='red', linestyle='--', linewidth=1.5, label=f'Benchmark ({benchmark_return:.2f})')
 axes[1].set_title('Total Return for Each Model (Backtest)')
 axes[1].set_xlabel('Model')
 axes[1].set_ylabel('Total Return')
 axes[1].grid(axis='y', linestyle='--', alpha=0.7)
+axes[1].legend()
 
-plt.tight_layout() # Adjust layout to prevent overlapping elements
+# Bar plot for remaining metrics
+# Using seaborn.catplot for easier facet plotting of multiple metrics on one graph
+sns.barplot(data=df_remaining_metrics, x='Model', y='Value', hue='Metric', ax=axes[0], palette='viridis')
+axes[0].set_title('Other Model Metrics')
+axes[0].set_xlabel('Model')
+axes[0].set_ylabel('Value')
+axes[0].grid(axis='y', linestyle='--', alpha=0.7)
+axes[0].legend(title='Metric')
+
+plt.tight_layout()
+plt.show()
+
+
+
+
